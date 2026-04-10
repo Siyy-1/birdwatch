@@ -21,7 +21,7 @@ resource "aws_db_parameter_group" "this" {
 resource "aws_db_instance" "this" {
   identifier                = "${var.app_name}-${var.environment}"
   engine                    = "postgres"
-  engine_version            = "16.3"
+  engine_version            = "16.6"
   instance_class            = local.instance_class
   allocated_storage         = 20
   max_allocated_storage     = 100
