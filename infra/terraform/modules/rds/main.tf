@@ -12,8 +12,9 @@ resource "aws_db_parameter_group" "this" {
   family = "postgres16"
 
   parameter {
-    name  = "shared_preload_libraries"
-    value = "postgis-3"
+    name         = "shared_preload_libraries"
+    value        = "pg_stat_statements"
+    apply_method = "pending-reboot"
   }
 }
 
