@@ -10,11 +10,13 @@ terraform {
     }
   }
 
-  # backend "s3" {
-  #   bucket = "birdwatch-terraform-state"
-  #   key    = "infra/terraform.tfstate"
-  #   region = "ap-northeast-2"
-  # }
+  backend "s3" {
+    bucket         = "birdwatch-terraform-state"
+    key            = "infra/terraform.tfstate"
+    region         = "ap-northeast-2"
+    dynamodb_table = "birdwatch-terraform-lock"
+    encrypt        = true
+  }
 }
 
 provider "aws" {

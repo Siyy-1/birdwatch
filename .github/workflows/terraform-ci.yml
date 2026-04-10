@@ -106,8 +106,8 @@ jobs:
             -var="db_password=${{ secrets.TF_DB_PASSWORD }}" \
             -var="cognito_kakao_client_id=${{ secrets.TF_KAKAO_CLIENT_ID }}" \
             -var="cognito_kakao_client_secret=${{ secrets.TF_KAKAO_CLIENT_SECRET }}" \
-            -var="cognito_google_client_id=${{ secrets.TF_GOOGLE_CLIENT_ID }}" \
-            -var="cognito_google_client_secret=${{ secrets.TF_GOOGLE_CLIENT_SECRET }}" \
+            -var="cognito_google_client_id=${{ secrets.GOOGLE_CLIENT_ID }}" \
+            -var="cognito_google_client_secret=${{ secrets.GOOGLE_CLIENT_SECRET }}" \
             -no-color \
             -out=tfplan 2>&1 | tee plan.txt
         continue-on-error: true
@@ -173,6 +173,6 @@ jobs:
             -var="db_password=${{ secrets.TF_DB_PASSWORD }}" \
             -var="cognito_kakao_client_id=${{ secrets.TF_KAKAO_CLIENT_ID }}" \
             -var="cognito_kakao_client_secret=${{ secrets.TF_KAKAO_CLIENT_SECRET }}" \
-            -var="cognito_google_client_id=${{ secrets.TF_GOOGLE_CLIENT_ID }}" \
-            -var="cognito_google_client_secret=${{ secrets.TF_GOOGLE_CLIENT_SECRET }}" \
+            -var="cognito_google_client_id=${{ secrets.GOOGLE_CLIENT_ID }}" \
+            -var="cognito_google_client_secret=${{ secrets.GOOGLE_CLIENT_SECRET }}" \
             -auto-approve

@@ -91,3 +91,11 @@ Thumbs.db
 coverage/
 *.log
 tmp/
+
+# Personal / temp files
+KakaoTalk_*.jpg
+스크린샷*.png
+화면\ 캡처*.png
+화면\ 캡처*.jpg
+test.jpg
+*.docx
