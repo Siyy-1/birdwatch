@@ -13,7 +13,7 @@ terraform {
 data "archive_file" "exif_stripper" {
   type        = "zip"
   source_file = "${path.module}/lambda/index.js"
-  output_path = "${path.module}/lambda/exif_stripper.zip"
+  output_path = "${path.root}/.terraform/${var.app_name}-${var.environment}-exif_stripper.zip"
 }
 
 resource "aws_s3_bucket" "photos" {

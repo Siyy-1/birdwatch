@@ -7,6 +7,7 @@
  *         is_owner = sighting.user_id === request.user.userId
  */
 import type { FastifyPluginAsync } from 'fastify'
+import { env } from '../../config/env.js'
 
 // ---- 타입 ----------------------------------------------------------------
 
@@ -294,7 +295,7 @@ const sightingsRoutes: FastifyPluginAsync = async (fastify) => {
       const pointsEarned = isFirstForUser ? (pointsResult.rows[0]?.points ?? 0) : 0
 
       // 사진 CDN URL 생성 (CloudFront)
-      const photoCdnUrl = `https://${process.env.CLOUDFRONT_DOMAIN}/${body.photo_s3_key}`
+      const photoCdnUrl = `https://${env.CLOUDFRONT_DOMAIN}/${body.photo_s3_key}`
 
       const insertResult = await fastify.pg.query(
         `INSERT INTO sightings (

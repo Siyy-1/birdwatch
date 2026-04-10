@@ -49,12 +49,8 @@ export async function signInWithKakao(): Promise<AuthResult> {
     state,
   })
 
-  const discovery = AuthSession.useAutoDiscovery(
-    `https://cognito-idp.ap-northeast-2.amazonaws.com/${process.env.EXPO_PUBLIC_COGNITO_USER_POOL_ID}`,
-  )
-
   const result = await request.promptAsync(
-    discovery ?? { authorizationEndpoint: `${COGNITO_DOMAIN}/oauth2/authorize` },
+    { authorizationEndpoint: `${COGNITO_DOMAIN}/oauth2/authorize` },
   )
 
   if (result.type !== 'success') {

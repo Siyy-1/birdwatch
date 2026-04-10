@@ -35,21 +35,31 @@
     },
     "plugins": [
       "expo-router",
-      ["expo-camera", { "cameraPermission": "조류 사진 촬영을 위해 카메라 접근이 필요합니다." }],
-      ["expo-location", { "locationWhenInUsePermission": "조류 목격 위치 기록을 위해 위치 접근이 필요합니다." }]
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "조류 사진 촬영을 위해 카메라 접근이 필요합니다."
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "조류 목격 위치 기록을 위해 위치 접근이 필요합니다."
+        }
+      ]
     ],
     "scheme": "birdwatch",
     "extra": {
-      "router": { "origin": false },
+      "router": {
+        "origin": false
+      },
       "eas": {
-        "projectId": "REPLACE_WITH_EAS_PROJECT_ID"
+        "projectId": "1a4d75d7-cbee-4008-b37e-a9f45bb3ddef"
       }
-    },
-    "updates": {
-      "url": "https://u.expo.dev/REPLACE_WITH_EAS_PROJECT_ID"
     },
     "runtimeVersion": {
       "policy": "appVersion"
-    }
+    },
+    "owner": "siyyy"
   }
 }

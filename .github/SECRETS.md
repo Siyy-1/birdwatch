@@ -119,9 +119,10 @@ aws iam attach-role-policy \
 - [ ] Terraform DynamoDB lock 테이블 생성: `birdwatch-terraform-locks`
 
 ### EAS 설정
-- [ ] `expo.dev`에서 프로젝트 생성 → Project ID를 `mobile/app.json`의 `eas.projectId`에 입력
+- [ ] `expo.dev`에서 프로젝트 생성 → Project ID를 GitHub Variable `EAS_PROJECT_ID`에 등록
+- [ ] Expo 계정/조직명을 GitHub Variable `EXPO_OWNER`에 등록
 - [ ] `EXPO_TOKEN` 발급 → GitHub Secret 등록
-- [ ] `mobile/eas.json`의 `REPLACE_WITH_*` 값 실제 Cognito ID로 교체 (terraform apply 후)
+- [ ] App Store/Play Store 제출 준비가 끝나면 GitHub Variable `EAS_SUBMIT_ENABLED=true` 등록
 
 ### Terraform Backend 활성화
 `infra/terraform/provider.tf`의 S3 backend 주석 해제 후:

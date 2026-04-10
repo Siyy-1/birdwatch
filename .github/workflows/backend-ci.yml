@@ -93,6 +93,7 @@ jobs:
             --region ap-northeast-2
 
       - name: Wait for ECS service to stabilize
+        timeout-minutes: 10
         env:
           ENV: ${{ vars.ENVIRONMENT || 'dev' }}
         run: |
@@ -100,3 +101,15 @@ jobs:
             --cluster birdwatch-$ENV \
             --services birdwatch-$ENV-backend \
             --region ap-northeast-2
+
+      - name: Dump ECS service events on failure
+        if: failure()
+        env:
+          ENV: ${{ vars.ENVIRONMENT || 'dev' }}
+        run: |
+          aws ecs describe-services \
+            --cluster birdwatch-$ENV \
+            --services birdwatch-$ENV-backend \
+            --region ap-northeast-2 \
+            --query 'services[0].events[0:10].[createdAt,message]' \
+            --output table

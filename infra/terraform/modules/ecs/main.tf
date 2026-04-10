@@ -1,4 +1,9 @@
 data "aws_caller_identity" "current" {}
+data "aws_region" "current" {}
+
+locals {
+  backend_healthcheck_command = "node -e \"fetch('http://localhost:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""
+}
 
 resource "aws_ecr_repository" "backend" {
   name                 = "${var.app_name}-backend-${var.environment}"
@@ -40,6 +45,25 @@ resource "aws_iam_role_policy_attachment" "ecs_task_execution" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
 
+resource "aws_iam_role_policy" "ecs_task_execution_ssm" {
+  name = "${var.app_name}-${var.environment}-ecs-task-execution-ssm"
+  role = aws_iam_role.ecs_task_execution.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "ssm:GetParameters",
+          "ssm:GetParameter"
+        ]
+        Resource = "arn:aws:ssm:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:parameter/${var.app_name}/${var.environment}/*"
+      }
+    ]
+  })
+}
+
 resource "aws_iam_role" "ecs_task" {
   name = "${var.app_name}-${var.environment}-ecs-task"
 
@@ -70,6 +94,13 @@ resource "aws_iam_role_policy" "ecs_task" {
           "s3:GetObject",
           "s3:PutObject"
         ]
+        Resource = "${var.s3_bucket_arn}/*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "s3:ListBucket"
+        ]
         Resource = var.s3_bucket_arn
       },
       {
@@ -77,7 +108,7 @@ resource "aws_iam_role_policy" "ecs_task" {
         Action = [
           "ssm:GetParameter"
         ]
-        Resource = "arn:aws:ssm:ap-northeast-2:*:parameter/birdwatch/*"
+        Resource = "arn:aws:ssm:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:parameter/${var.app_name}/${var.environment}/*"
       }
     ]
   })
@@ -142,16 +173,48 @@ resource "aws_ecs_task_definition" "backend" {
         {
           name  = "AI_INFERENCE_URL"
           value = "http://localhost:8001"
+        },
+        {
+          name  = "COGNITO_USER_POOL_ID"
+          value = var.cognito_user_pool_id
+        },
+        {
+          name  = "COGNITO_CLIENT_ID"
+          value = var.cognito_client_id
+        },
+        {
+          name  = "COGNITO_REGION"
+          value = data.aws_region.current.name
+        },
+        {
+          name  = "COGNITO_DOMAIN"
+          value = "https://${var.cognito_domain}.auth.${data.aws_region.current.name}.amazoncognito.com"
+        },
+        {
+          name  = "S3_BUCKET"
+          value = var.s3_bucket_name
+        },
+        {
+          name  = "S3_REGION"
+          value = data.aws_region.current.name
+        },
+        {
+          name  = "CLOUDFRONT_DOMAIN"
+          value = var.cloudfront_domain
+        },
+        {
+          name  = "AWS_REGION"
+          value = data.aws_region.current.name
         }
       ]
       secrets = [
         {
           name      = "DATABASE_URL"
-          valueFrom = "arn:aws:ssm:ap-northeast-2:${data.aws_caller_identity.current.account_id}:parameter/birdwatch/${var.environment}/database_url"
+          valueFrom = "arn:aws:ssm:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:parameter/${var.app_name}/${var.environment}/database_url"
         },
         {
           name      = "JWT_SECRET"
-          valueFrom = "arn:aws:ssm:ap-northeast-2:${data.aws_caller_identity.current.account_id}:parameter/birdwatch/${var.environment}/jwt_secret"
+          valueFrom = "arn:aws:ssm:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:parameter/${var.app_name}/${var.environment}/jwt_secret"
         }
       ]
       logConfiguration = {
@@ -163,7 +226,7 @@ resource "aws_ecs_task_definition" "backend" {
         }
       }
       healthCheck = {
-        command     = ["CMD-SHELL", "wget -qO- http://localhost:3000/health >/dev/null || exit 1"]
+        command     = ["CMD-SHELL", local.backend_healthcheck_command]
         interval    = 30
         timeout     = 5
         retries     = 3
@@ -173,7 +236,7 @@ resource "aws_ecs_task_definition" "backend" {
     {
       name      = "tf-serving"
       image     = "${aws_ecr_repository.tf_serving.repository_url}:latest"
-      essential = true
+      essential = false
       cpu       = 256
       memory    = 512
       portMappings = [
@@ -194,7 +257,7 @@ resource "aws_ecs_task_definition" "backend" {
       secrets = [
         {
           name      = "MODEL_PATH"
-          valueFrom = "arn:aws:ssm:ap-northeast-2:${data.aws_caller_identity.current.account_id}:parameter/birdwatch/${var.environment}/model_path"
+          valueFrom = "arn:aws:ssm:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:parameter/${var.app_name}/${var.environment}/model_path"
         }
       ]
       logConfiguration = {
@@ -301,7 +364,6 @@ resource "aws_ecs_service" "backend" {
 
   lifecycle {
     ignore_changes = [
-      task_definition,
       desired_count
     ]
   }
