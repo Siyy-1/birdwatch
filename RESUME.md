@@ -1,6 +1,6 @@
 # BirdWatch 재시작 가이드
 
-## 현재 상태 (2026-04-09)
+## 현재 상태 (2026-04-10)
 
 ### 완료된 작업
 - [x] DB 마이그레이션 (000001~000010)
@@ -30,37 +30,86 @@
 - [x] **EAS 빌드 설정** (`eas.json`, `app.json` runtimeVersion/updates 추가)
 - [x] **GitHub Secrets 설정 가이드** (`.github/SECRETS.md` — AWS OIDC CLI 커맨드 포함)
 - [x] **Backend 테스트 전체 작성 + 통과** (vitest, 24개 테스트)
-  - `vitest.config.ts`, `src/__tests__/helpers.ts` (pgResult, createTestJwt, mockUserRow)
-  - `auth.test.ts` (5), `species.test.ts` (7), `ai.test.ts` (5), `gallery.test.ts` (7)
 - [x] **Mobile 테스트 전체 작성 + 통과** (jest, 43개 테스트)
-  - `babel.config.js` 추가 (babel-preset-expo, Flow 타입 변환)
-  - `time.test.ts` (13), `badges.test.ts` (21), `authStore.test.ts` (9)
 - [x] **지도 탭 Vworld 타일 전환 + 버그 수정 (2026-04-09)**
-  - `ANDROID_SDK_HOME` / `ANDROID_USER_HOME` 충돌로 빌드 실패 → `unset ANDROID_SDK_HOME` 후 빌드
-  - 백엔드 `localhost:3000` network error → `wslrelay.exe`가 IPv6 루프백 선점, 백엔드 컨테이너 재시작으로 해결
-  - MapLibre `setAccessToken('')` → 기본 데모 스타일(`demotiles.maplibre.org`) 로드 → `setAccessToken(null)` 으로 수정
-  - `styleJSON` prop → 네이티브가 인식하는 실제 prop명은 `mapStyle` 이었음 (조용히 무시되던 버그)
-  - OSM 타일 → **Vworld 국토지리정보원 타일** 전환 (API 키: `.env`의 `EXPO_PUBLIC_VWORLD_API_KEY`)
-  - 지도 줌 제한: `minZoomLevel=6.5` / `maxZoomLevel=18`
-  - 지도 패닝 범위 제한: 한반도 bounding box (`sw:[124,33]` ~ `ne:[132.5,38.9]`)
 
-### 중단된 이유
-지도 탭 Vworld 전환 완료. 다음 세션에서 카메라 E2E 테스트 및 오프라인 큐 검증 진행 예정.
+#### 2026-04-10 추가 완료 작업
+
+- [x] **지도 탭 Google Maps 교체**
+  - MapLibre → react-native-maps 1.14.0 (PROVIDER_GOOGLE)
+  - Android API 키: `AIzaSyBv2HnIQh0CW0VVzwlMWJLqRn0301KHaAs`
+  - iOS API 키: `AIzaSyDetDDXjGi7vMETsw3pGHsu60hy6IxVCEw`
+  - 마커 표시, 내 위치 버튼, 하단 카드 팝업 구현
+  - toolbarEnabled=false (경로찾기 버튼 제거)
+
+- [x] **AWS 인프라 구축 (dev 환경)**
+  - IAM Role: `birdwatch-github-actions` (OIDC, AdministratorAccess)
+    - ARN: `arn:aws:iam::217770239239:role/birdwatch-github-actions`
+    - Trust: `repo:Siyy-1/birdwatch:ref:refs/heads/main` + `environment:production`
+  - Terraform S3 backend: `birdwatch-terraform-state` + DynamoDB `birdwatch-terraform-lock`
+  - Terraform apply 완료 (dev):
+    - VPC / 서브넷 / 보안그룹
+    - RDS: `birdwatch-dev.crmmyguco7l9.ap-northeast-2.rds.amazonaws.com:5432` (PostgreSQL 16.6)
+    - S3: `birdwatch-photos-dev`
+    - CloudFront: `d1qfcnvsv0dgn3.cloudfront.net`
+    - Cognito User Pool: `ap-northeast-2_02B00gBTS`, Client ID: `3rn92feur0tejqandll7lcs1q4`
+    - Cognito Domain: `birdwatch-dev.auth.ap-northeast-2.amazoncognito.com`
+    - ECR: `birdwatch-backend-dev`, `birdwatch-tf-serving-dev`
+    - ECS Cluster: `birdwatch-dev`, Service: `birdwatch-dev-backend` (running ✅)
+    - ALB: `birdwatch-dev-alb-947231738.ap-northeast-2.elb.amazonaws.com`
+
+- [x] **GitHub 설정**
+  - 레포: `https://github.com/Siyy-1/birdwatch` (public)
+  - `production` 환경: Required Reviewer = Siyy-1
+  - GitHub CLI: `/c/Program Files/GitHub CLI/gh.exe`
+  - Secrets: AWS_ROLE_ARN, AWS_DEPLOY_ROLE_ARN, AWS_TERRAFORM_ROLE_ARN, EXPO_TOKEN,
+    GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_MAPS_API_KEY_ANDROID,
+    GOOGLE_MAPS_API_KEY_IOS, TF_DB_PASSWORD, TF_KAKAO_CLIENT_ID, TF_KAKAO_CLIENT_SECRET
+  - Variables: AWS_REGION=ap-northeast-2, ENVIRONMENT=dev,
+    EAS_PROJECT_ID=1a4d75d7-cbee-4008-b37e-a9f45bb3ddef, EXPO_OWNER=siyyy
+
+- [x] **SSM 파라미터 (Terraform 관리)**
+  - `/birdwatch/dev/database_url` (SecureString)
+  - `/birdwatch/dev/jwt_secret` (SecureString, random_password로 생성)
+  - `/birdwatch/dev/model_path` = `/models/birdwatch_v1.0.0.tflite`
+
+- [x] **Terraform 드리프트 해소**
+  - ECS task definition에 환경변수 추가 (COGNITO_*, S3_BUCKET, CLOUDFRONT_DOMAIN 등)
+  - ECS task execution role에 SSM read 정책 추가
+  - tf-serving container를 `essential=false`로 변경 (AI sidecar 실패 시 백엔드 생존)
+  - healthcheck: `wget` → `node fetch` (alpine 이미지 호환)
+  - `ssm.tf` 신규: SSM 파라미터 Terraform으로 관리
+  - `random` provider 추가 (jwt_secret 생성)
+  - `infra/terraform/.terraform.lock.hcl` 커밋 포함
+
+- [x] **CI/CD 안정화**
+  - backend-ci.yml: `timeout-minutes: 10` + ECS 이벤트 덤프 on failure
+  - mobile-ci.yml: EAS_PROJECT_ID/EXPO_OWNER 주입, EAS_SUBMIT_ENABLED 가드
+  - terraform-ci.yml: TF version 1.14.8, secret 이름 통일
+  - Backend CI/CD: ✅ 완전 통과 (lint+test+ECR+ECS)
+  - Terraform CI/CD: ✅ 완전 통과 (apply 자동화)
+  - Mobile CI/CD: ✅ lint+test 통과, EAS preview 빌드 자동화
+
+- [x] **Mobile EAS 설정 완성**
+  - `eas.json`: 모든 플레이스홀더를 실제 Cognito/CDN 값으로 교체
+  - `mobile/app.config.js`: EAS_PROJECT_ID/EXPO_OWNER 동적 주입
+  - `mobile/.eslintrc.json`: ESLint 설정 추가
+  - `mobile/src/types/jest-globals.d.ts`: Jest 글로벌 타입 선언
+  - EAS 프로젝트: `@siyyy/birdwatch` (ID: `1a4d75d7-cbee-4008-b37e-a9f45bb3ddef`)
+
+- [x] **ECR tf-serving에 nginx:alpine placeholder 이미지 푸시**
+  - tf-serving이 essential=false이므로 백엔드는 정상 동작
 
 ---
 
 ## 재시작 절차
 
-### Step 1: 백엔드 스택 기동
+### Step 1: 백엔드 스택 기동 (로컬 개발)
 ```bash
 cd /c/workspace/Project_2
 docker compose up -d
-# 헬스체크 확인 (약 60초 소요)
 docker compose ps
 ```
-
-> **주의**: postgres 볼륨이 살아있으면 DB 초기화 자동 스킵됨.
-> 볼륨이 날아갔을 경우 → 아래 "DB 재초기화" 섹션 참고.
 
 ### Step 2: ADB 포트 포워딩 (기기 연결 후)
 ```bash
@@ -77,6 +126,18 @@ npx expo start --port 8081
 ### Step 4: 앱 실행
 기기에서 **BirdWatch 앱** (Expo Go 아님) 직접 실행.
 로그인: `dev@test.com` (비밀번호 불필요, dev-login)
+
+---
+
+## AWS 도구 경로 (Windows)
+```bash
+AWS="/c/Program Files/Amazon/AWSCLIV2/aws"
+TF="/c/Users/SY/AppData/Local/Microsoft/WinGet/Packages/Hashicorp.Terraform_Microsoft.Winget.Source_8wekyb3d8bbwe/terraform.exe"
+GH="/c/Program Files/GitHub CLI/gh.exe"
+
+# Git Bash에서 AWS CLI 경로 파싱 오류 방지
+export MSYS_NO_PATHCONV=1
+```
 
 ---
 
@@ -101,6 +162,48 @@ docker exec -i birdwatch-postgres psql -U birdwatch -d birdwatch < \
 docker exec -i birdwatch-postgres psql -U birdwatch -d birdwatch < \
   /c/workspace/Project_2/db/functions/obscure_coordinate.sql
 ```
+
+---
+
+## 남은 개발 작업
+
+| 우선순위 | 작업 | 비고 |
+|---------|------|------|
+| **P0** | RDS PostGIS 설치 + DB 마이그레이션 실행 | AWS RDS에 직접 접속하여 실행 필요. Bastion 또는 SSM Session Manager 경유 |
+| **P0** | api.birdwatch.kr 도메인 + ACM + HTTPS | ALB에 HTTPS 리스너 추가, Terraform `acm_certificate_arn` 적용 |
+| **P0** | 카메라 E2E 플로우 기기 테스트 | 촬영 → 업로드 → AI 결과 → 저장 (로컬 환경) |
+| **P1** | tf-serving 실제 AI 이미지 ECR 푸시 | `docker build -f ai/Dockerfile.serving` 후 `birdwatch-tf-serving-dev`에 push |
+| **P1** | 지도 마커 렌더링 기기 확인 | Google Maps 전환 후 sightings 마커 실제 표시 여부 확인 필요 |
+| **P1** | 오프라인 큐 동작 확인 | offlineQueue.ts + SQLite, 네트워크 끊김 시나리오 테스트 |
+| **P2** | AI 모델 실제 추론 | tf-serving float16 타입 불일치 수정 필요 |
+| **P2** | 구독 화면 플로우 | subscription.tsx → 결제 미연동 상태 확인 |
+| **P2** | EAS Submit 설정 | App Store/Play Store 계정 준비 후 `EAS_SUBMIT_ENABLED=true` Variable 추가 |
+| **P2** | `ANDROID_SDK_HOME` 환경변수 영구 제거 | 시스템 환경변수에서 삭제하면 빌드 시 `unset` 불필요 |
+| **P3** | Mobile lint 경고 정리 | camera.tsx useEffect deps, onboarding.tsx unused vars 등 18개 warning |
+| **P3** | Backend lint 경고 정리 | PresignResponse, TfServingResponse unused 등 7개 warning |
+
+### P0: RDS PostGIS + 마이그레이션 실행 방법
+```bash
+# SSM Session Manager로 RDS 접속 (Bastion 없는 경우)
+# 1. ECS 태스크에서 psql 실행
+AWS="/c/Program Files/Amazon/AWSCLIV2/aws"
+TASK_ARN=$("$AWS" ecs list-tasks --cluster birdwatch-dev --service-name birdwatch-dev-backend \
+  --query 'taskArns[0]' --output text --region ap-northeast-2)
+
+"$AWS" ecs execute-command \
+  --cluster birdwatch-dev \
+  --task "$TASK_ARN" \
+  --container backend \
+  --interactive \
+  --command "psql \$DATABASE_URL -c 'CREATE EXTENSION IF NOT EXISTS postgis;'" \
+  --region ap-northeast-2
+```
+
+### P0: api.birdwatch.kr HTTPS 설정
+1. AWS ACM에서 `api.birdwatch.kr` 인증서 발급 (ap-northeast-2)
+2. `infra/terraform/variables.tf`의 `acm_certificate_arn` 업데이트
+3. `terraform apply` → ALB HTTPS 리스너 자동 생성
+4. Route 53 또는 DNS에서 `api.birdwatch.kr` → ALB DNS 연결
 
 ---
 
@@ -135,21 +238,17 @@ docker exec -i birdwatch-postgres psql -U birdwatch -d birdwatch < \
 | 25 | MapLibre `setAccessToken('')` → 기본 데모 스타일 로드 | `setAccessToken(null)` 으로 변경 |
 | 26 | MapView `styleJSON` prop → 네이티브에서 무시됨 | 올바른 prop명 `mapStyle` 로 변경 |
 | 27 | 지도 범위 밖으로 패닝 시 검은 화면 | Camera `maxBounds` 한반도 bounding box 설정 |
-
----
-
-## 남은 개발 작업
-
-| 우선순위 | 작업 | 비고 |
-|---------|------|------|
-| **P0** | 카메라 E2E 플로우 기기 테스트 | 촬영 → 업로드 → AI 결과 → 저장 |
-| **P0** | GitHub Secrets 등록 | `.github/SECRETS.md` 가이드 참고, AWS OIDC 설정 포함 |
-| P1 | Terraform 실제 배포 | `infra/terraform/` → S3 백엔드 활성화 후 `terraform apply` |
-| P1 | 지도 마커 렌더링 기기 확인 | Vworld 전환 후 sightings 마커 실제 표시 여부 확인 필요 |
-| P1 | 오프라인 큐 동작 확인 | offlineQueue.ts + SQLite, 네트워크 끊김 시나리오 테스트 |
-| P2 | AI 모델 실제 추론 | tf-serving float16 타입 불일치 수정 필요 |
-| P2 | 구독 화면 플로우 | subscription.tsx → 결제 미연동 상태 확인 |
-| P2 | `ANDROID_SDK_HOME` 환경변수 영구 제거 | 시스템 환경변수에서 삭제하면 빌드 시 `unset` 불필요 |
+| 28 | react-native-maps 1.27.2 + RN 0.74 호환 불가 | 1.14.0으로 다운그레이드 |
+| 29 | compileSdk 35 → expo-modules-core Kotlin 오류 | compileSdk 34, androidx.core:core-ktx:1.13.1 강제 |
+| 30 | Google Maps 빈 화면 (INVALID_ARGUMENT) | Maps SDK for Android 활성화 + API 키 제한 해제 |
+| 31 | Terraform RDS engine_version 16.3 미지원 | 16.6으로 변경 |
+| 32 | Terraform Cognito schema 수정 불가 | `lifecycle { ignore_changes = [schema] }` 추가 |
+| 33 | RDS `shared_preload_libraries = postgis-3` 오류 | `pg_stat_statements`로 변경 (PostGIS는 CREATE EXTENSION으로 설치) |
+| 34 | ECS task execution role SSM 권한 없음 | IAM inline policy 추가 (`ssm:GetParameters`) |
+| 35 | ECS backend 환경변수 누락 (COGNITO_*, S3_BUCKET 등) | Task definition 수동 → Terraform으로 관리 전환 |
+| 36 | ECR birdwatch-tf-serving-dev 이미지 없음 | nginx:alpine placeholder 이미지 push |
+| 37 | mobile package-lock.json 미동기화 | `npm install` 후 재커밋 |
+| 38 | OIDC sub claim 불일치 (environment:production) | trust-policy에 `environment:production` 조건 추가 |
 
 ---
 
@@ -178,11 +277,14 @@ npx jest --testPathPattern="src/(utils|constants|store)/__tests__" --no-coverage
 | AI mock (dev) | `/c/workspace/Project_2/backend/src/routes/v1/ai.ts` |
 | API 클라이언트 | `/c/workspace/Project_2/mobile/src/services/api.ts` |
 | 카메라 화면 | `/c/workspace/Project_2/mobile/app/(tabs)/camera.tsx` |
-| 지도 화면 | `/c/workspace/Project_2/mobile/app/(tabs)/index.tsx` |
+| 지도 화면 (Google Maps) | `/c/workspace/Project_2/mobile/app/(tabs)/index.tsx` |
 | AI 모델 | `/c/workspace/Project_2/ai/models/birdwatch_v1.0.0.tflite` |
 | DB 마이그레이션 | `/c/workspace/Project_2/db/migrations/` |
 | Terraform 인프라 | `/c/workspace/Project_2/infra/terraform/` |
+| Terraform SSM 파라미터 | `/c/workspace/Project_2/infra/terraform/ssm.tf` |
 | GitHub Actions | `/c/workspace/Project_2/.github/workflows/` |
 | GitHub Secrets 가이드 | `/c/workspace/Project_2/.github/SECRETS.md` |
 | Backend 테스트 헬퍼 | `/c/workspace/Project_2/backend/src/__tests__/helpers.ts` |
+| Mobile EAS 설정 | `/c/workspace/Project_2/mobile/eas.json` |
+| Mobile app.config | `/c/workspace/Project_2/mobile/app.config.js` |
 | Metro 설정 | `/c/workspace/Project_2/mobile/metro.config.js` |
