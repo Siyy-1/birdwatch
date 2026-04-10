@@ -92,11 +92,11 @@ resource "aws_cognito_identity_provider" "apple" {
   provider_type = "SignInWithApple"
 
   provider_details = {
-    client_id                     = var.apple_services_id
-    team_id                       = var.apple_team_id
-    key_id                        = var.apple_key_id
-    private_key                   = var.apple_private_key
-    authorize_scopes              = "name email"
+    client_id        = var.apple_services_id
+    team_id          = var.apple_team_id
+    key_id           = var.apple_key_id
+    private_key      = var.apple_private_key
+    authorize_scopes = "name email"
   }
 
   attribute_mapping = {

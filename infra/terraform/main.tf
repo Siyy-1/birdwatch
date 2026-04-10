@@ -46,14 +46,14 @@ module "cognito" {
 module "ecs" {
   source = "./modules/ecs"
 
-  environment          = var.environment
-  app_name             = var.app_name
-  vpc_id               = module.vpc.vpc_id
-  public_subnet_ids    = module.vpc.public_subnet_ids
-  private_subnet_ids   = module.vpc.private_subnet_ids
-  sg_alb_id            = module.vpc.sg_alb_id
-  sg_backend_id        = module.vpc.sg_backend_id
-  sg_tf_serving_id     = module.vpc.sg_tf_serving_id
-  s3_bucket_arn        = module.s3.s3_bucket_arn
-  acm_certificate_arn  = var.acm_certificate_arn
+  environment         = var.environment
+  app_name            = var.app_name
+  vpc_id              = module.vpc.vpc_id
+  public_subnet_ids   = module.vpc.public_subnet_ids
+  private_subnet_ids  = module.vpc.private_subnet_ids
+  sg_alb_id           = module.vpc.sg_alb_id
+  sg_backend_id       = module.vpc.sg_backend_id
+  sg_tf_serving_id    = module.vpc.sg_tf_serving_id
+  s3_bucket_arn       = module.s3.s3_bucket_arn
+  acm_certificate_arn = var.acm_certificate_arn
 }
