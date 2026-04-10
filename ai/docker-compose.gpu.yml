@@ -1,0 +1,96 @@
+# =============================================================================
+# ai/docker-compose.gpu.yml — BirdWatch 로컬 GPU 학습 실행 구성
+# =============================================================================
+#
+# 사전 요구사항:
+#   1. NVIDIA Container Toolkit 설치
+#      https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html
+#   2. Windows 11 + WSL2 환경:
+#      - Docker Desktop 4.x 이상 (GPU support 활성화)
+#      - WSL2 백엔드 사용 (Settings > General > Use WSL 2 based engine)
+#      - NVIDIA GPU 드라이버 설치 (CUDA Toolkit 불필요 — 컨테이너 내부에 포함)
+#   3. RTX 3070 확인: docker run --rm --gpus all nvidia/cuda:11.8.0-base-ubuntu22.04 nvidia-smi
+#
+# 사용법 (프로젝트 루트에서 실행):
+#   # 전체 학습 파이프라인 실행
+#   docker compose -f ai/docker-compose.gpu.yml up --build
+#
+#   # 백그라운드 실행
+#   docker compose -f ai/docker-compose.gpu.yml up --build -d
+#
+#   # 로그 확인
+#   docker compose -f ai/docker-compose.gpu.yml logs -f trainer
+#
+#   # 소규모 테스트 실행 (클래스당 30장, 3 epoch)
+#   docker compose -f ai/docker-compose.gpu.yml run --rm trainer \
+#     python scripts/train_model.py \
+#     --max_images_per_class 30 --epochs 3 --skip_tflite
+#
+#   # 파이프라인 전체 (수집 → 전처리 → TFRecord → 학습)
+#   docker compose -f ai/docker-compose.gpu.yml run --rm trainer \
+#     bash scripts/run_training_pipeline.sh
+#
+# 환경변수 커스터마이징:
+#   SPECIES_MAP, MIN_IMAGES, MODEL_VERSION, BATCH_SIZE,
+#   INITIAL_EPOCHS, FINETUNE_EPOCHS (run_training_pipeline.sh 참조)
+#
+# PIPA 준수:
+#   - 학습 데이터는 로컬 볼륨에만 저장 (외부 전송 없음)
+#   - EXIF 제거는 preprocess_images.py 단계에서 처리
+# =============================================================================
+
+version: '3.8'
+
+services:
+  trainer:
+    build:
+      context: ..
+      dockerfile: ai/Dockerfile.gpu
+    image: birdwatch-trainer:latest
+
+    # NVIDIA GPU 런타임 활성화
+    runtime: nvidia
+
+    environment:
+      # GPU 메모리 동적 할당 (RTX 3070 8GB VRAM 보호)
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      - TF_FORCE_GPU_ALLOW_GROWTH=true
+      - TF_CPP_MIN_LOG_LEVEL=2
+      - PYTHONUNBUFFERED=1
+
+      # 파이프라인 파라미터 (기본값, run_training_pipeline.sh와 동기화)
+      - SPECIES_MAP=${SPECIES_MAP:-data/species_map_full.json}
+      - MIN_IMAGES=${MIN_IMAGES:-200}
+      - MODEL_VERSION=${MODEL_VERSION:-v1.0.0}
+      - BATCH_SIZE=${BATCH_SIZE:-64}
+      - INITIAL_EPOCHS=${INITIAL_EPOCHS:-15}
+      - FINETUNE_EPOCHS=${FINETUNE_EPOCHS:-25}
+
+    volumes:
+      # 호스트 경로 → 컨테이너 마운트 (바인드 마운트)
+      # 프로젝트 루트 기준 상대 경로
+      - ../data:/workspace/data
+      - ../ai/models:/workspace/ai/models
+      - ../ai/checkpoints:/workspace/ai/checkpoints
+      - ../logs:/workspace/logs
+
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1          # RTX 3070 단일 GPU
+              capabilities: [gpu]
+
+    # 컨테이너 종료 후 자동 제거 (로컬 테스트용)
+    # 프로덕션 ECS에서는 ecs_task_definition.json 사용
+    restart: "no"
+
+    # 헬스체크: TF 임포트 성공 여부 확인
+    healthcheck:
+      test: ["CMD", "python", "-c", "import tensorflow as tf; print(tf.__version__)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s

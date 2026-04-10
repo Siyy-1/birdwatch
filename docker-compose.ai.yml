@@ -1,0 +1,90 @@
+# docker-compose.ai.yml — BirdWatch AI 파이프라인 개발용 Compose
+#
+# 사용법:
+#   docker compose -f docker-compose.ai.yml up --build
+#
+# tf-serving 단독 기동:
+#   docker compose -f docker-compose.ai.yml up tf-serving
+#
+# 백엔드와 함께 기동 (backend는 별도 Compose 파일이 있다고 가정):
+#   docker compose -f docker-compose.yml -f docker-compose.ai.yml up
+
+version: "3.9"
+
+networks:
+  birdwatch-ai:
+    driver: bridge
+
+services:
+  # ── TF Serving 래퍼 (EfficientNet-Lite B2 INT8 TFLite 추론 서버) ────────────
+  tf-serving:
+    build:
+      context: .                          # 프로젝트 루트 기준
+      dockerfile: ai/Dockerfile.serving
+    container_name: birdwatch-tf-serving
+    restart: unless-stopped
+    ports:
+      - "8001:8001"
+    environment:
+      MODEL_PATH: /models/birdwatch_v1.0.0.tflite
+      LABEL_MAP_PATH: /models/label_map.json
+      MODEL_VERSION: "${AI_MODEL_VERSION:-v1.0.0}"
+      TOP_K: "3"
+      PORT: "8001"
+    volumes:
+      # 개발 중 모델 파일을 직접 마운트 (이미지 재빌드 없이 교체 가능)
+      - ./ai/models:/models:ro
+      # 추론 서버 코드도 마운트하여 핫-리로드 불필요 (uvicorn --reload 미사용)
+      - ./ai/scripts/tf_serving_wrapper.py:/app/tf_serving_wrapper.py:ro
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 3
+    networks:
+      - birdwatch-ai
+    deploy:
+      resources:
+        limits:
+          # CPU: 개발 환경에서는 GPU 없이 CPU 추론
+          # 프로덕션(ECS Fargate g4dn.xlarge)에서는 GPU delegate 사용
+          cpus: "2.0"
+          memory: 2G
+
+  # ── 백엔드 (AI 라우트 포함) ──────────────────────────────────────────────────
+  # 기존 docker-compose.yml의 backend 서비스와 함께 사용하거나,
+  # 단독 개발 시 아래 서비스를 활성화한다.
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile             # 기존 backend Dockerfile (없으면 tsconfig 빌드)
+    container_name: birdwatch-backend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: development
+      PORT: "3000"
+      LOG_LEVEL: debug
+      # AI 서빙 URL — tf-serving 컨테이너 서비스명으로 참조
+      AI_INFERENCE_URL: "http://tf-serving:8001"
+      AI_MODEL_VERSION: "${AI_MODEL_VERSION:-v1.0.0}"
+      AI_CONFIDENCE_THRESHOLD: "0.85"
+      # 아래 환경변수는 .env 파일 또는 호스트 환경에서 주입
+      DATABASE_URL: "${DATABASE_URL}"
+      COGNITO_USER_POOL_ID: "${COGNITO_USER_POOL_ID}"
+      COGNITO_CLIENT_ID: "${COGNITO_CLIENT_ID}"
+      COGNITO_REGION: "${COGNITO_REGION:-ap-northeast-2}"
+      S3_BUCKET: "${S3_BUCKET}"
+      S3_REGION: "${S3_REGION:-ap-northeast-2}"
+      CLOUDFRONT_DOMAIN: "${CLOUDFRONT_DOMAIN}"
+    depends_on:
+      tf-serving:
+        condition: service_healthy
+    networks:
+      - birdwatch-ai
+    profiles:
+      # `--profile full` 옵션 없이는 tf-serving만 기동
+      # 예: docker compose -f docker-compose.ai.yml --profile full up
+      - full

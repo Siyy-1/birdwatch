@@ -1,0 +1,8 @@
+# BirdWatch TF Serving Wrapper — Python 의존성
+# tensorflow 2.13.1은 numpy<=1.24.3 요구 → fastapi/pydantic 버전도 맞춤
+tensorflow==2.13.1
+fastapi==0.103.2
+uvicorn[standard]==0.23.2
+Pillow==10.3.0
+python-multipart==0.0.6
+pydantic==1.10.13

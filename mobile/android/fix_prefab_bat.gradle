@@ -1,0 +1,25 @@
+// Workaround: AGP 8.2.1 generates .bat files with LF endings on Windows,
+// causing ^ continuation to fail in CMD. Hook into task execution to
+// convert all generated .bat files to CRLF before they run.
+gradle.projectsEvaluated {
+    subprojects { project ->
+        project.tasks.configureEach { task ->
+            if (task.name.startsWith('configureCMake')) {
+                task.doFirst {
+                    def logDir = new File(project.buildDir, "intermediates/cxx")
+                    if (logDir.exists()) {
+                        logDir.eachFileRecurse { f ->
+                            if (f.name.endsWith('.bat')) {
+                                def content = f.text
+                                if (!content.contains('\r\n')) {
+                                    f.text = content.replace('\n', '\r\n')
+                                    println "Fixed LF->CRLF: ${f.path}"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

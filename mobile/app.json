@@ -1,0 +1,55 @@
+{
+  "expo": {
+    "name": "BirdWatch",
+    "slug": "birdwatch",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "automatic",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#1B4332"
+    },
+    "ios": {
+      "bundleIdentifier": "kr.birdwatch.app",
+      "supportsTablet": false,
+      "infoPlist": {
+        "NSCameraUsageDescription": "조류 사진 촬영을 위해 카메라 접근이 필요합니다.",
+        "NSLocationWhenInUseUsageDescription": "조류 목격 위치 기록을 위해 위치 접근이 필요합니다.",
+        "NSPhotoLibraryUsageDescription": "갤러리에서 조류 사진을 선택하기 위해 필요합니다."
+      }
+    },
+    "android": {
+      "package": "kr.birdwatch.app",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#1B4332"
+      },
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.READ_EXTERNAL_STORAGE"
+      ]
+    },
+    "plugins": [
+      "expo-router",
+      ["expo-camera", { "cameraPermission": "조류 사진 촬영을 위해 카메라 접근이 필요합니다." }],
+      ["expo-location", { "locationWhenInUsePermission": "조류 목격 위치 기록을 위해 위치 접근이 필요합니다." }]
+    ],
+    "scheme": "birdwatch",
+    "extra": {
+      "router": { "origin": false },
+      "eas": {
+        "projectId": "REPLACE_WITH_EAS_PROJECT_ID"
+      }
+    },
+    "updates": {
+      "url": "https://u.expo.dev/REPLACE_WITH_EAS_PROJECT_ID"
+    },
+    "runtimeVersion": {
+      "policy": "appVersion"
+    }
+  }
+}

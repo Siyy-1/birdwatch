@@ -1,0 +1,5 @@
+// Fix: AGP 8.2.1 generates .bat files with LF endings on Windows,
+// causing ^-continuation to fail in CMD. This init script converts
+// them to CRLF before execution.
+gradle.taskGraph.afterTask { task ->
+}

@@ -1,0 +1,7 @@
+[
+  {"species_id": "KR-050", "name_sci": "Passer montanus",    "name_ko": "참새"},
+  {"species_id": "KR-051", "name_sci": "Pica serica",        "name_ko": "까치"},
+  {"species_id": "KR-052", "name_sci": "Parus major",        "name_ko": "박새"},
+  {"species_id": "KR-056", "name_sci": "Hypsipetes amaurotis", "name_ko": "직박구리"},
+  {"species_id": "KR-057", "name_sci": "Motacilla alba",     "name_ko": "흰할미새"}
+]

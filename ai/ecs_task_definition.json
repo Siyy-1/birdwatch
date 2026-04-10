@@ -1,0 +1,226 @@
+{
+  "_comment": [
+    "==========================================================================",
+    "ai/ecs_task_definition.json — BirdWatch ECS Fargate GPU 태스크 정의 템플릿",
+    "==========================================================================",
+    "",
+    "사용법:",
+    "  # 1. 환경변수 설정",
+    "  export AWS_ACCOUNT_ID=123456789012",
+    "  export EFS_FILESYSTEM_ID=fs-xxxxxxxxx",
+    "  export ECS_EXECUTION_ROLE_ARN=arn:aws:iam::${AWS_ACCOUNT_ID}:role/birdwatch-ecs-execution-role",
+    "  export ECS_TASK_ROLE_ARN=arn:aws:iam::${AWS_ACCOUNT_ID}:role/birdwatch-ecs-task-role",
+    "",
+    "  # 2. 플레이스홀더 치환 후 등록",
+    "  envsubst < ai/ecs_task_definition.json > /tmp/task_def_resolved.json",
+    "  aws ecs register-task-definition \\",
+    "    --cli-input-json file:///tmp/task_def_resolved.json \\",
+    "    --region ap-northeast-2",
+    "",
+    "  # 3. 태스크 실행 (ECS 클러스터 필요)",
+    "  aws ecs run-task \\",
+    "    --cluster birdwatch-trainer-cluster \\",
+    "    --task-definition birdwatch-trainer \\",
+    "    --launch-type FARGATE \\",
+    "    --network-configuration 'awsvpcConfiguration={subnets=[subnet-xxxxxxxx],securityGroups=[sg-xxxxxxxx],assignPublicIp=DISABLED}' \\",
+    "    --region ap-northeast-2",
+    "",
+    "  # 4. 태스크 로그 확인",
+    "  aws logs tail /ecs/birdwatch-trainer --follow --region ap-northeast-2",
+    "",
+    "플레이스홀더 목록:",
+    "  ${AWS_ACCOUNT_ID}     — AWS 계정 ID (12자리)",
+    "  ${EFS_FILESYSTEM_ID}  — EFS 파일시스템 ID (fs-xxxxxxxxx)",
+    "  ${ECS_EXECUTION_ROLE_ARN} — ECS 실행 역할 ARN (ECR 풀, CloudWatch 로그 권한)",
+    "  ${ECS_TASK_ROLE_ARN}  — ECS 태스크 역할 ARN (S3, Secrets Manager 접근 권한)",
+    "",
+    "PIPA 준수:",
+    "  - 리전: ap-northeast-2 (서울) 고정",
+    "  - EFS: 서울 리전 전용, 다른 리전 마운트 금지",
+    "  - CloudWatch Logs: ap-northeast-2 로그 그룹에만 기록",
+    "  - 컨테이너 내 학습 데이터는 EFS에만 저장, 외부 전송 없음",
+    "=========================================================================="
+  ],
+  "family": "birdwatch-trainer",
+  "taskRoleArn": "${ECS_TASK_ROLE_ARN}",
+  "executionRoleArn": "${ECS_EXECUTION_ROLE_ARN}",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": [
+    "FARGATE"
+  ],
+  "runtimePlatform": {
+    "cpuArchitecture": "X86_64",
+    "operatingSystemFamily": "LINUX"
+  },
+  "cpu": "8192",
+  "memory": "30720",
+  "containerDefinitions": [
+    {
+      "name": "birdwatch-trainer",
+      "image": "${AWS_ACCOUNT_ID}.dkr.ecr.ap-northeast-2.amazonaws.com/birdwatch-trainer:latest",
+      "essential": true,
+      "resourceRequirements": [
+        {
+          "type": "GPU",
+          "value": "1"
+        }
+      ],
+      "environment": [
+        {
+          "name": "TF_FORCE_GPU_ALLOW_GROWTH",
+          "value": "true"
+        },
+        {
+          "name": "TF_CPP_MIN_LOG_LEVEL",
+          "value": "2"
+        },
+        {
+          "name": "PYTHONUNBUFFERED",
+          "value": "1"
+        },
+        {
+          "name": "MODEL_VERSION",
+          "value": "v1.0.0"
+        },
+        {
+          "name": "BATCH_SIZE",
+          "value": "64"
+        },
+        {
+          "name": "INITIAL_EPOCHS",
+          "value": "15"
+        },
+        {
+          "name": "FINETUNE_EPOCHS",
+          "value": "25"
+        },
+        {
+          "name": "MIN_IMAGES",
+          "value": "200"
+        },
+        {
+          "name": "RAW_DIR",
+          "value": "/workspace/data/raw"
+        },
+        {
+          "name": "PROCESSED_DIR",
+          "value": "/workspace/data/processed"
+        },
+        {
+          "name": "TFRECORDS_DIR",
+          "value": "/workspace/data/tfrecords"
+        },
+        {
+          "name": "MODELS_DIR",
+          "value": "/workspace/ai/models"
+        },
+        {
+          "name": "LOG_DIR",
+          "value": "/workspace/logs"
+        },
+        {
+          "name": "AWS_DEFAULT_REGION",
+          "value": "ap-northeast-2"
+        }
+      ],
+      "mountPoints": [
+        {
+          "sourceVolume": "birdwatch-data",
+          "containerPath": "/workspace/data",
+          "readOnly": false
+        },
+        {
+          "sourceVolume": "birdwatch-models",
+          "containerPath": "/workspace/ai/models",
+          "readOnly": false
+        },
+        {
+          "sourceVolume": "birdwatch-logs",
+          "containerPath": "/workspace/logs",
+          "readOnly": false
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/birdwatch-trainer",
+          "awslogs-region": "ap-northeast-2",
+          "awslogs-stream-prefix": "ecs",
+          "awslogs-create-group": "true",
+          "awslogs-datetime-format": "%Y-%m-%d %H:%M:%S"
+        }
+      },
+      "ulimits": [
+        {
+          "name": "nofile",
+          "softLimit": 65536,
+          "hardLimit": 65536
+        }
+      ],
+      "stopTimeout": 120,
+      "healthCheck": {
+        "command": [
+          "CMD-SHELL",
+          "python -c \"import tensorflow as tf; exit(0 if len(tf.config.list_physical_devices('GPU')) > 0 else 1)\" || exit 1"
+        ],
+        "interval": 60,
+        "timeout": 30,
+        "retries": 3,
+        "startPeriod": 120
+      }
+    }
+  ],
+  "volumes": [
+    {
+      "name": "birdwatch-data",
+      "efsVolumeConfiguration": {
+        "fileSystemId": "${EFS_FILESYSTEM_ID}",
+        "rootDirectory": "/birdwatch/data",
+        "transitEncryption": "ENABLED",
+        "authorizationConfig": {
+          "iam": "ENABLED"
+        }
+      }
+    },
+    {
+      "name": "birdwatch-models",
+      "efsVolumeConfiguration": {
+        "fileSystemId": "${EFS_FILESYSTEM_ID}",
+        "rootDirectory": "/birdwatch/models",
+        "transitEncryption": "ENABLED",
+        "authorizationConfig": {
+          "iam": "ENABLED"
+        }
+      }
+    },
+    {
+      "name": "birdwatch-logs",
+      "efsVolumeConfiguration": {
+        "fileSystemId": "${EFS_FILESYSTEM_ID}",
+        "rootDirectory": "/birdwatch/logs",
+        "transitEncryption": "ENABLED",
+        "authorizationConfig": {
+          "iam": "ENABLED"
+        }
+      }
+    }
+  ],
+  "tags": [
+    {
+      "key": "Project",
+      "value": "BirdWatch"
+    },
+    {
+      "key": "Environment",
+      "value": "prod"
+    },
+    {
+      "key": "Region",
+      "value": "ap-northeast-2"
+    },
+    {
+      "key": "Component",
+      "value": "ai-trainer"
+    }
+  ]
+}

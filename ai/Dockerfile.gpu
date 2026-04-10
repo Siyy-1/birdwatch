@@ -1,0 +1,88 @@
+# =============================================================================
+# ai/Dockerfile.gpu — BirdWatch EfficientNetB2 GPU 학습 이미지
+# =============================================================================
+#
+# 사용법:
+#   # 이미지 빌드 (프로젝트 루트에서 실행)
+#   docker build -f ai/Dockerfile.gpu -t birdwatch-trainer:latest .
+#
+#   # 로컬 GPU 실행 (NVIDIA Container Toolkit 필요)
+#   docker run --gpus all \
+#     -v $(pwd)/data:/workspace/data \
+#     -v $(pwd)/ai/models:/workspace/ai/models \
+#     -v $(pwd)/logs:/workspace/logs \
+#     birdwatch-trainer:latest
+#
+#   # AWS ECR 푸시 (ecs_task_definition.json과 함께 사용)
+#   aws ecr get-login-password --region ap-northeast-2 | \
+#     docker login --username AWS --password-stdin \
+#     ${AWS_ACCOUNT_ID}.dkr.ecr.ap-northeast-2.amazonaws.com
+#   docker tag birdwatch-trainer:latest \
+#     ${AWS_ACCOUNT_ID}.dkr.ecr.ap-northeast-2.amazonaws.com/birdwatch-trainer:latest
+#   docker push \
+#     ${AWS_ACCOUNT_ID}.dkr.ecr.ap-northeast-2.amazonaws.com/birdwatch-trainer:latest
+#
+# 주의사항:
+#   - CUDA 11.8 + cuDNN 8.6 (TensorFlow 2.13.0 공식 지원)
+#   - 로컬 실행 시 NVIDIA Container Toolkit 설치 필요
+#     https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html
+#   - Windows 로컬 개발: WSL2 + Docker Desktop GPU 지원 활성화 필요
+#   - PIPA 준수: 학습 데이터는 서울 리전 EFS/S3에만 저장, 타 리전 복제 금지
+# =============================================================================
+
+FROM tensorflow/tensorflow:2.13.0-gpu
+
+# 빌드 메타데이터
+LABEL project="BirdWatch" \
+      environment="prod" \
+      region="ap-northeast-2" \
+      maintainer="birdwatch-infra"
+
+WORKDIR /workspace
+
+# 시스템 패키지 업데이트 및 필수 도구 설치
+# libGL: OpenCV/Pillow 이미지 처리 의존성
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    libsm6 \
+    libxrender1 \
+    libxext6 \
+    curl \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Python 의존성 설치
+# requirements.txt를 먼저 복사해 레이어 캐시 최대화
+COPY ai/requirements.txt .
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
+
+# 소스 코드 복사
+COPY ai/scripts/ scripts/
+
+# 종 매핑 파일 복사 (300종 정의)
+# 실행 시 볼륨 마운트로 덮어쓸 수 있음
+COPY data/species_map_full.json data/species_map_full.json
+
+# 데이터 볼륨 마운트 포인트
+#   /workspace/data       — 원시/전처리/TFRecord 데이터 (EFS 마운트)
+#   /workspace/ai/models  — 학습 완료 모델 출력 (EFS 마운트)
+#   /workspace/logs       — 학습 로그 (EFS 마운트)
+VOLUME ["/workspace/data", "/workspace/ai/models", "/workspace/logs"]
+
+# GPU 메모리 증가 방식 설정 (OOM 방지)
+ENV TF_FORCE_GPU_ALLOW_GROWTH=true \
+    TF_CPP_MIN_LOG_LEVEL=2 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+# 기본 명령: Phase 1 (헤드 학습) + Phase 2 (미세조정) + TFLite INT8 변환
+# 환경변수로 재정의 가능: docker run -e MODEL_VERSION=v1.1.0 ...
+CMD ["python", "scripts/train_model.py", \
+     "--processed_dir", "/workspace/data/processed", \
+     "--output_dir", "/workspace/ai/models", \
+     "--version", "v1.0.0", \
+     "--batch_size", "64", \
+     "--initial_epochs", "15", \
+     "--finetune_epochs", "25"]

@@ -1,0 +1,51 @@
+# ── BirdWatch TF Serving Wrapper ─────────────────────────────────────────────
+# EfficientNet-Lite B2 INT8 TFLite 추론 서버
+# Base: python:3.11-slim (tensorflow 2.13 호환)
+# ─────────────────────────────────────────────────────────────────────────────
+
+FROM python:3.11-slim AS base
+
+# 시스템 의존성: libgomp (TFLite 멀티스레드), wget (헬스체크용)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libgomp1 \
+        wget \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# ── Python 의존성 레이어 (코드 변경 시 캐시 재사용) ──────────────────────────
+
+COPY ai/requirements.serving.txt /app/requirements.txt
+RUN pip install --no-cache-dir -r /app/requirements.txt
+
+# ── 모델 파일 복사 ─────────────────────────────────────────────────────────────
+
+COPY ai/models/ /models/
+
+# ── 추론 서버 스크립트 복사 ───────────────────────────────────────────────────
+
+COPY ai/scripts/tf_serving_wrapper.py /app/tf_serving_wrapper.py
+
+# ── 환경변수 기본값 ────────────────────────────────────────────────────────────
+
+ENV MODEL_PATH=/models/birdwatch_v1.0.0.tflite \
+    LABEL_MAP_PATH=/models/label_map.json \
+    MODEL_VERSION=v1.0.0 \
+    TOP_K=3 \
+    PORT=8001 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+EXPOSE 8001
+
+# ── 헬스체크 ──────────────────────────────────────────────────────────────────
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD wget --no-verbose --tries=1 --spider http://localhost:8001/health || exit 1
+
+# ── 서버 기동 ─────────────────────────────────────────────────────────────────
+# workers=1: TFLite interpreter는 단일 인스턴스로 운영 (thread-safe 미보장)
+# ECS Fargate에서 수평 확장(태스크 복제)으로 처리량을 늘린다.
+
+CMD ["python", "-m", "uvicorn", "tf_serving_wrapper:app", \
+     "--host", "0.0.0.0", "--port", "8001", "--workers", "1", "--log-level", "info"]

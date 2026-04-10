@@ -1,0 +1,128 @@
+# docker-compose.yml — BirdWatch 로컬 개발 환경 (전체 스택)
+#
+# 기동:
+#   docker compose up -d
+#
+# 로그 확인:
+#   docker compose logs -f backend
+#   docker compose logs -f tf-serving
+#
+# 초기화 (DB 볼륨 삭제 후 재시작):
+#   docker compose down -v && docker compose up -d
+
+version: "3.9"
+
+networks:
+  birdwatch:
+    driver: bridge
+
+volumes:
+  postgres_data:
+
+services:
+  # ── PostgreSQL + PostGIS ────────────────────────────────────────────────────
+  postgres:
+    image: postgis/postgis:16-3.4-alpine
+    container_name: birdwatch-postgres
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB:       birdwatch
+      POSTGRES_USER:     birdwatch
+      POSTGRES_PASSWORD: birdwatch_dev
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # 마이그레이션 자동 실행 (컨테이너 최초 기동 시)
+      - ./db/migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U birdwatch -d birdwatch"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - birdwatch
+
+  # ── Backend (Fastify) ───────────────────────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: development
+    container_name: birdwatch-backend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV:          development
+      PORT:              3000
+      LOG_LEVEL:         debug
+
+      DATABASE_URL:      postgresql://birdwatch:birdwatch_dev@postgres:5432/birdwatch
+
+      # ── Cognito (로컬 개발: mock 값 사용, 실제 테스트 시 .env에서 오버라이드) ──
+      COGNITO_USER_POOL_ID:  ${COGNITO_USER_POOL_ID:-ap-northeast-2_LOCALDEV}
+      COGNITO_CLIENT_ID:     ${COGNITO_CLIENT_ID:-local_client_id}
+      COGNITO_REGION:        ${COGNITO_REGION:-ap-northeast-2}
+      COGNITO_DOMAIN:        ${COGNITO_DOMAIN:-https://localhost}
+      JWT_SECRET:            ${JWT_SECRET:-local_dev_jwt_secret_32chars_min!!}
+
+      # ── S3 / CloudFront (로컬: localstack 또는 mock) ──────────────────────
+      S3_BUCKET:         ${S3_BUCKET:-birdwatch-local}
+      S3_REGION:         ${S3_REGION:-ap-northeast-2}
+      CLOUDFRONT_DOMAIN: ${CLOUDFRONT_DOMAIN:-localhost:4566}
+
+      # ── AI 서비스 ─────────────────────────────────────────────────────────
+      AI_INFERENCE_URL:        ${AI_INFERENCE_URL:-http://tf-serving:8001}
+      AI_MODEL_VERSION:        ${AI_MODEL_VERSION:-v1.0.0}
+      AI_CONFIDENCE_THRESHOLD: ${AI_CONFIDENCE_THRESHOLD:-0.85}
+
+      # ── Rate limit ────────────────────────────────────────────────────────
+      RATE_LIMIT_MAX:        200
+      RATE_LIMIT_WINDOW_MS:  60000
+    depends_on:
+      postgres:
+        condition: service_healthy
+      tf-serving:
+        condition: service_healthy
+    volumes:
+      # hot-reload: src 변경 시 tsx watch가 자동 재시작
+      - ./backend/src:/app/src:ro
+      - ./backend/package.json:/app/package.json:ro
+    networks:
+      - birdwatch
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 -O /dev/null http://127.0.0.1:3000/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  # ── TF Serving (TFLite 추론 서버) ────────────────────────────────────────────
+  tf-serving:
+    build:
+      context: .
+      dockerfile: ai/Dockerfile.serving
+    container_name: birdwatch-tf-serving
+    restart: unless-stopped
+    ports:
+      - "8001:8001"
+    environment:
+      MODEL_PATH:      /models/birdwatch_v1.0.0.tflite
+      LABEL_MAP_PATH:  /models/label_map.json
+      MODEL_VERSION:   v1.0.0
+      TOP_K:           "3"
+      PORT:            "8001"
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "-O", "/dev/null", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 3
+    networks:
+      - birdwatch
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2G
