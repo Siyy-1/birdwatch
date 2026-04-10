@@ -31,6 +31,10 @@ resource "aws_cognito_user_pool" "this" {
     mutable             = true
     required            = false
   }
+
+  lifecycle {
+    ignore_changes = [schema]
+  }
 }
 
 resource "aws_cognito_user_pool_domain" "this" {
