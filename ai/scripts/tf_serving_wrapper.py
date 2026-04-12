@@ -36,6 +36,7 @@ FALLBACK_MODEL_PATH = Path(os.environ.get("FALLBACK_MODEL_PATH", "/models/birdwa
 MODEL_VERSION = os.environ.get("MODEL_VERSION", "v1.0.0")
 TOP_K         = int(os.environ.get("TOP_K", "3"))
 INPUT_SIZE    = 260  # EfficientNet-Lite B2 native input size
+EAGER_LOAD_KERAS_FALLBACK = os.environ.get("EAGER_LOAD_KERAS_FALLBACK", "true").lower() == "true"
 
 # ── TFLite Interpreter 초기화 ─────────────────────────────────────────────────
 
@@ -92,6 +93,8 @@ index_to_species: dict[int, str] = _load_label_map(LABEL_PATH)
 num_classes = len(index_to_species)
 active_inference_backend = "tflite"
 keras_fallback_model = None
+keras_fallback_ready = False
+keras_fallback_error: str | None = None
 print(
     f"[tf_serving_wrapper] 로드 완료 — 클래스 수: {num_classes}, "
     f"입력 shape: {input_details[0]['shape']}, 버전: {MODEL_VERSION}"
@@ -188,7 +191,7 @@ def normalize_dtype_config(node):
 
 def load_keras_fallback_model():
     """CPU에서 mixed_precision 문제를 피하기 위해 float32 정책으로 fallback 모델을 재구성한다."""
-    global keras_fallback_model
+    global keras_fallback_model, keras_fallback_ready, keras_fallback_error
 
     if keras_fallback_model is not None:
         return keras_fallback_model
@@ -209,6 +212,8 @@ def load_keras_fallback_model():
         ]
     )
     keras_fallback_model = fallback_model
+    keras_fallback_ready = True
+    keras_fallback_error = None
     print("[tf_serving_wrapper] Keras fallback 로드 완료")
     return keras_fallback_model
 
@@ -298,6 +303,21 @@ app = FastAPI(
 )
 
 
+@app.on_event("startup")
+async def warm_keras_fallback() -> None:
+    """첫 요청 timeout을 피하기 위해 CPU-safe fallback 모델을 미리 로드한다."""
+    global keras_fallback_error
+
+    if not EAGER_LOAD_KERAS_FALLBACK or not FALLBACK_MODEL_PATH.exists():
+        return
+
+    try:
+        load_keras_fallback_model()
+    except Exception as exc:
+        keras_fallback_error = str(exc)
+        print(f"[tf_serving_wrapper] Keras fallback preload 실패: {exc}")
+
+
 @app.get("/health")
 async def health():
     """서버 및 모델 상태 확인"""
@@ -309,6 +329,9 @@ async def health():
         "num_classes": num_classes,
         "input_size": INPUT_SIZE,
         "inference_backend": active_inference_backend,
+        "keras_fallback_ready": keras_fallback_ready,
+        "keras_fallback_error": keras_fallback_error,
+        "eager_load_keras_fallback": EAGER_LOAD_KERAS_FALLBACK,
     }
 
 
