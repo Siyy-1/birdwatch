@@ -14,15 +14,20 @@
 - private RDS 대응 `ECS one-off task` migration 경로 검증 완료
 - dev RDS minor upgrade 완료: `PostgreSQL 16.6 -> 16.11`
 - tf-serving CPU fallback 및 cold-start preload 적용 완료
+- AI 재학습 트랙 착수
+  - 현재 모델 `141`종 / `top-1 0.625`
+  - `159`종 누락 확인
+  - `full 300종 rebuild` manifest / runbook 준비 완료
 
 ## 다음 작업
 
 1. `P1` 시작: 갤러리 탭을 `birding feed`로 재설계
-2. 병렬 핵심 트랙: AI 모델 `300종 재학습` 계획 확정 및 데이터셋 갭 분석
-3. 마이페이지를 `profile-first` 구조로 재설계
-4. 오프라인 큐 복구 UX와 retry 정책 고도화
-5. `ai_feedback` export / 검수 / 재학습 연결 정리
-6. 지도 클러스터링 / 희귀도 핀 / sighting detail 연결
+2. 병렬 핵심 트랙: `300종 full rebuild` 기준으로 raw 재수집 큐 실행
+3. 새 버전 경로로 전처리 / TFRecord / `v1.1.0` 재학습 준비
+4. 마이페이지를 `profile-first` 구조로 재설계
+5. 오프라인 큐 복구 UX와 retry 정책 고도화
+6. `ai_feedback` export / 검수 / 재학습 연결 정리
+7. 지도 클러스터링 / 희귀도 핀 / sighting detail 연결
 
 ## 참고 규칙 / 문서
 
@@ -44,3 +49,5 @@
 - 전체 실행 계획: [BIRDWATCH_PLAN.md](/C:/workspace/Project_2/BIRDWATCH_PLAN.md)
 - DB 운영 체크리스트: [PROD_MIGRATION_CHECKLIST.md](/C:/workspace/Project_2/db/PROD_MIGRATION_CHECKLIST.md)
 - AI 재학습 gap report: [AI_RETRAINING_GAP_REPORT.md](/C:/workspace/Project_2/ai/AI_RETRAINING_GAP_REPORT.md)
+- AI full rebuild summary: [FULL_RETRAINING_SUMMARY.md](/C:/workspace/Project_2/ai/FULL_RETRAINING_SUMMARY.md)
+- AI full rebuild runbook: [FULL_RETRAINING_RUNBOOK.md](/C:/workspace/Project_2/ai/FULL_RETRAINING_RUNBOOK.md)

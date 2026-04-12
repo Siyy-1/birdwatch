@@ -44,12 +44,15 @@
   - `top-1 accuracy = 0.625`
   - `top-5 accuracy = 0.899`
 - 상세 gap report: [AI_RETRAINING_GAP_REPORT.md](/C:/workspace/Project_2/ai/AI_RETRAINING_GAP_REPORT.md)
+- full rebuild 요약: [FULL_RETRAINING_SUMMARY.md](/C:/workspace/Project_2/ai/FULL_RETRAINING_SUMMARY.md)
+- 실행 runbook: [FULL_RETRAINING_RUNBOOK.md](/C:/workspace/Project_2/ai/FULL_RETRAINING_RUNBOOK.md)
 - PRD 목표와 차이:
   - 목표 종 수: `300`
   - 목표 정확도: `top-1 >= 0.80`, `top-3 >= 0.92`
 - 결론:
   - 현재 모델은 `중간 단계 모델`로 봐야 한다.
   - `300종 커버리지`와 `정확도 목표`를 만족하는 재학습 트랙이 필요하다.
+  - 다음 AI 작업은 `부분 보강`이 아니라 `전체 300종 full rebuild`로 진행한다.
 
 ## P0 체크리스트
 
@@ -103,17 +106,21 @@
 
 ## 병렬 핵심 트랙: AI 모델 재학습
 
-- `[ ]` 현재 학습 커버리지 기준 확정
-  - `species_map_full.json` 소스 확정
-  - 현재 `141` 클래스와 누락 종 목록 추출
-- `[ ]` 데이터셋 갭 분석
+- `[x]` 현재 학습 커버리지 기준 확정
+  - `species_map_full.json` 확인
+  - 현재 `141` 클래스와 누락 종 `159`개 추출
+- `[x]` 데이터셋 갭 분석
   - 종별 이미지 수 분포 확인
-  - 희귀종/계절종/오분류 상위 종 확인
+  - raw/processed/label_map 불일치 확인
   - train/val/test split 품질 점검
-- `[ ]` 300종 학습 입력 정리
-  - `300`종 species map 완성
-  - 클래스별 최소 학습 장수 기준 재설정
-  - 부족 종은 iNaturalist/GBIF/수동 큐레이션으로 보강
+- `[x]` full retraining manifest / runbook 준비
+  - `FULL_RETRAINING_MANIFEST.*`
+  - `FULL_RETRAINING_SUMMARY.md`
+  - `FULL_RETRAINING_RUNBOOK.md`
+- `[ ]` 300종 전체 재수집 큐 실행
+  - `P0 -> P1 -> P2 -> P3` 우선순위 적용
+  - raw `200` floor 우선 달성
+  - 이후 PRD gate용 추가 수집 라운드
 - `[ ]` 재학습 파이프라인 1차 실행
   - preprocessing
   - TFRecord 생성
