@@ -37,60 +37,176 @@ jobs:
     permissions:
       id-token: write
       contents: read
-    defaults:
-      run:
-        working-directory: backend
     env:
       APP_NAME: birdwatch
+      AWS_REGION: ap-northeast-2
       TARGET_ENV: ${{ inputs.target_environment }}
 
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-          cache-dependency-path: backend/package-lock.json
-
-      - name: Install dependencies
-        run: npm ci
-
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ secrets.AWS_TERRAFORM_ROLE_ARN }}
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ap-northeast-2
 
-      - name: Load DATABASE_URL from SSM
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push migration image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |
+          IMAGE_URI="$ECR_REGISTRY/$APP_NAME-backend-$TARGET_ENV:migration-${GITHUB_SHA}"
+          docker build -f backend/Dockerfile -t "$IMAGE_URI" .
+          docker push "$IMAGE_URI"
+          echo "IMAGE_URI=$IMAGE_URI" >> "$GITHUB_ENV"
+
+      - name: Prepare ECS migration task definition
         shell: bash
         run: |
-          DATABASE_URL="$(aws ssm get-parameter \
-            --name "/${APP_NAME}/${TARGET_ENV}/database_url" \
-            --with-decryption \
-            --query 'Parameter.Value' \
-            --output text)"
-          echo "DATABASE_URL=$DATABASE_URL" >> "$GITHUB_ENV"
+          SERVICE_JSON="$(aws ecs describe-services \
+            --cluster "$APP_NAME-$TARGET_ENV" \
+            --services "$APP_NAME-$TARGET_ENV-backend" \
+            --region "$AWS_REGION" \
+            --output json)"
 
-      - name: Pre-flight doctor
-        run: npm run db:migrate:doctor
+          echo "$SERVICE_JSON" > service.json
 
-      - name: Pre-flight status
-        run: npm run db:migrate:status
+          TASK_DEF_ARN="$(jq -r '.services[0].taskDefinition' service.json)"
+          SUBNETS="$(jq -r '.services[0].networkConfiguration.awsvpcConfiguration.subnets | join(",")' service.json)"
+          SECURITY_GROUPS="$(jq -r '.services[0].networkConfiguration.awsvpcConfiguration.securityGroups | join(",")' service.json)"
+          ASSIGN_PUBLIC_IP="$(jq -r '.services[0].networkConfiguration.awsvpcConfiguration.assignPublicIp' service.json)"
 
-      - name: Baseline existing migrations
-        if: ${{ inputs.baseline_through != '' }}
-        run: npm run db:migrate:baseline -- --through ${{ inputs.baseline_through }}
+          TASK_DEF_JSON="$(aws ecs describe-task-definition \
+            --task-definition "$TASK_DEF_ARN" \
+            --region "$AWS_REGION" \
+            --output json)"
 
-      - name: Apply pending migrations
-        if: ${{ inputs.apply_pending }}
-        run: npm run db:migrate
+          echo "$TASK_DEF_JSON" > task-def.json
 
-      - name: Post-flight status
-        run: npm run db:migrate:status
+          python - <<'PY'
+import json
+import os
 
-      - name: Post-flight doctor
-        run: npm run db:migrate:doctor
+with open("task-def.json", "r", encoding="utf-8") as f:
+    raw = json.load(f)["taskDefinition"]
+
+allowed = {
+    "family",
+    "taskRoleArn",
+    "executionRoleArn",
+    "networkMode",
+    "containerDefinitions",
+    "volumes",
+    "placementConstraints",
+    "requiresCompatibilities",
+    "cpu",
+    "memory",
+    "runtimePlatform",
+    "ephemeralStorage",
+    "pidMode",
+    "ipcMode",
+    "proxyConfiguration",
+}
+
+task_def = {k: v for k, v in raw.items() if k in allowed and v is not None}
+
+for container in task_def["containerDefinitions"]:
+    if container["name"] == "backend":
+        container["image"] = os.environ["IMAGE_URI"]
+
+with open("task-def-register.json", "w", encoding="utf-8") as f:
+    json.dump(task_def, f)
+PY
+
+          REGISTERED="$(aws ecs register-task-definition \
+            --cli-input-json file://task-def-register.json \
+            --region "$AWS_REGION" \
+            --output json)"
+
+          echo "MIGRATION_TASK_DEF_ARN=$(echo "$REGISTERED" | jq -r '.taskDefinition.taskDefinitionArn')" >> "$GITHUB_ENV"
+          echo "MIGRATION_NETWORK_CONFIG=awsvpcConfiguration={subnets=[$SUBNETS],securityGroups=[$SECURITY_GROUPS],assignPublicIp=$ASSIGN_PUBLIC_IP}" >> "$GITHUB_ENV"
+
+      - name: Run migration commands in ECS
+        shell: bash
+        env:
+          APPLY_PENDING: ${{ inputs.apply_pending }}
+          BASELINE_THROUGH: ${{ inputs.baseline_through }}
+        run: |
+          set -euo pipefail
+
+          run_migration_task() {
+            local migration_command="$1"
+            shift || true
+
+            local cmd_json
+            cmd_json="$(printf '%s\n' "$@" | jq -R . | jq -sc --arg base "node" --arg script "dist/scripts/migrate.js" --arg command "$migration_command" '[$base, $script, $command] + .')"
+
+            local overrides
+            overrides="$(jq -nc --argjson command "$cmd_json" '{containerOverrides:[{name:"backend",command:$command}]}')"
+
+            local task_arn
+            task_arn="$(aws ecs run-task \
+              --cluster "$APP_NAME-$TARGET_ENV" \
+              --launch-type FARGATE \
+              --task-definition "$MIGRATION_TASK_DEF_ARN" \
+              --network-configuration "$MIGRATION_NETWORK_CONFIG" \
+              --overrides "$overrides" \
+              --region "$AWS_REGION" \
+              --query 'tasks[0].taskArn' \
+              --output text)"
+
+            if [[ -z "$task_arn" || "$task_arn" == "None" ]]; then
+              echo "Failed to start migration task for command: $migration_command" >&2
+              exit 1
+            fi
+
+            aws ecs wait tasks-stopped \
+              --cluster "$APP_NAME-$TARGET_ENV" \
+              --tasks "$task_arn" \
+              --region "$AWS_REGION"
+
+            local task_id
+            task_id="${task_arn##*/}"
+
+            local task_result
+            task_result="$(aws ecs describe-tasks \
+              --cluster "$APP_NAME-$TARGET_ENV" \
+              --tasks "$task_arn" \
+              --region "$AWS_REGION" \
+              --output json)"
+
+            local exit_code
+            exit_code="$(echo "$task_result" | jq -r '.tasks[0].containers[] | select(.name=="backend") | .exitCode // 1')"
+
+            aws logs tail "/ecs/$APP_NAME-$TARGET_ENV/backend" \
+              --log-stream-names "ecs/backend/$task_id" \
+              --since 1h \
+              --region "$AWS_REGION" || true
+
+            if [[ "$exit_code" != "0" ]]; then
+              echo "Migration task failed for command: $migration_command" >&2
+              echo "$task_result" >&2
+              exit "$exit_code"
+            fi
+          }
+
+          run_migration_task doctor
+          run_migration_task status
+
+          if [[ -n "${BASELINE_THROUGH:-}" ]]; then
+            run_migration_task baseline "--through" "$BASELINE_THROUGH"
+          fi
+
+          if [[ "${APPLY_PENDING}" == "true" ]]; then
+            run_migration_task up
+          fi
+
+          run_migration_task status
+          run_migration_task doctor
 
   migrate-prod:
     name: Migrate production
@@ -103,24 +219,13 @@ jobs:
     permissions:
       id-token: write
       contents: read
-    defaults:
-      run:
-        working-directory: backend
     env:
       APP_NAME: birdwatch
+      AWS_REGION: ap-northeast-2
       TARGET_ENV: prod
 
     steps:
       - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-          cache-dependency-path: backend/package-lock.json
-
-      - name: Install dependencies
-        run: npm ci
 
       - name: Guard production apply confirmation
         if: ${{ inputs.apply_pending }}
@@ -134,35 +239,162 @@ jobs:
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ secrets.AWS_TERRAFORM_ROLE_ARN }}
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ap-northeast-2
 
-      - name: Load DATABASE_URL from SSM
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push migration image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |
+          IMAGE_URI="$ECR_REGISTRY/$APP_NAME-backend-$TARGET_ENV:migration-${GITHUB_SHA}"
+          docker build -f backend/Dockerfile -t "$IMAGE_URI" .
+          docker push "$IMAGE_URI"
+          echo "IMAGE_URI=$IMAGE_URI" >> "$GITHUB_ENV"
+
+      - name: Prepare ECS migration task definition
         shell: bash
         run: |
-          DATABASE_URL="$(aws ssm get-parameter \
-            --name "/${APP_NAME}/${TARGET_ENV}/database_url" \
-            --with-decryption \
-            --query 'Parameter.Value' \
-            --output text)"
-          echo "DATABASE_URL=$DATABASE_URL" >> "$GITHUB_ENV"
+          SERVICE_JSON="$(aws ecs describe-services \
+            --cluster "$APP_NAME-$TARGET_ENV" \
+            --services "$APP_NAME-$TARGET_ENV-backend" \
+            --region "$AWS_REGION" \
+            --output json)"
 
-      - name: Pre-flight doctor
-        run: npm run db:migrate:doctor
+          echo "$SERVICE_JSON" > service.json
 
-      - name: Pre-flight status
-        run: npm run db:migrate:status
+          TASK_DEF_ARN="$(jq -r '.services[0].taskDefinition' service.json)"
+          SUBNETS="$(jq -r '.services[0].networkConfiguration.awsvpcConfiguration.subnets | join(",")' service.json)"
+          SECURITY_GROUPS="$(jq -r '.services[0].networkConfiguration.awsvpcConfiguration.securityGroups | join(",")' service.json)"
+          ASSIGN_PUBLIC_IP="$(jq -r '.services[0].networkConfiguration.awsvpcConfiguration.assignPublicIp' service.json)"
 
-      - name: Baseline existing migrations
-        if: ${{ inputs.baseline_through != '' }}
-        run: npm run db:migrate:baseline -- --through ${{ inputs.baseline_through }}
+          TASK_DEF_JSON="$(aws ecs describe-task-definition \
+            --task-definition "$TASK_DEF_ARN" \
+            --region "$AWS_REGION" \
+            --output json)"
 
-      - name: Apply pending migrations
-        if: ${{ inputs.apply_pending }}
-        run: npm run db:migrate
+          echo "$TASK_DEF_JSON" > task-def.json
 
-      - name: Post-flight status
-        run: npm run db:migrate:status
+          python - <<'PY'
+import json
+import os
 
-      - name: Post-flight doctor
-        run: npm run db:migrate:doctor
+with open("task-def.json", "r", encoding="utf-8") as f:
+    raw = json.load(f)["taskDefinition"]
+
+allowed = {
+    "family",
+    "taskRoleArn",
+    "executionRoleArn",
+    "networkMode",
+    "containerDefinitions",
+    "volumes",
+    "placementConstraints",
+    "requiresCompatibilities",
+    "cpu",
+    "memory",
+    "runtimePlatform",
+    "ephemeralStorage",
+    "pidMode",
+    "ipcMode",
+    "proxyConfiguration",
+}
+
+task_def = {k: v for k, v in raw.items() if k in allowed and v is not None}
+
+for container in task_def["containerDefinitions"]:
+    if container["name"] == "backend":
+        container["image"] = os.environ["IMAGE_URI"]
+
+with open("task-def-register.json", "w", encoding="utf-8") as f:
+    json.dump(task_def, f)
+PY
+
+          REGISTERED="$(aws ecs register-task-definition \
+            --cli-input-json file://task-def-register.json \
+            --region "$AWS_REGION" \
+            --output json)"
+
+          echo "MIGRATION_TASK_DEF_ARN=$(echo "$REGISTERED" | jq -r '.taskDefinition.taskDefinitionArn')" >> "$GITHUB_ENV"
+          echo "MIGRATION_NETWORK_CONFIG=awsvpcConfiguration={subnets=[$SUBNETS],securityGroups=[$SECURITY_GROUPS],assignPublicIp=$ASSIGN_PUBLIC_IP}" >> "$GITHUB_ENV"
+
+      - name: Run migration commands in ECS
+        shell: bash
+        env:
+          APPLY_PENDING: ${{ inputs.apply_pending }}
+          BASELINE_THROUGH: ${{ inputs.baseline_through }}
+        run: |
+          set -euo pipefail
+
+          run_migration_task() {
+            local migration_command="$1"
+            shift || true
+
+            local cmd_json
+            cmd_json="$(printf '%s\n' "$@" | jq -R . | jq -sc --arg base "node" --arg script "dist/scripts/migrate.js" --arg command "$migration_command" '[$base, $script, $command] + .')"
+
+            local overrides
+            overrides="$(jq -nc --argjson command "$cmd_json" '{containerOverrides:[{name:"backend",command:$command}]}')"
+
+            local task_arn
+            task_arn="$(aws ecs run-task \
+              --cluster "$APP_NAME-$TARGET_ENV" \
+              --launch-type FARGATE \
+              --task-definition "$MIGRATION_TASK_DEF_ARN" \
+              --network-configuration "$MIGRATION_NETWORK_CONFIG" \
+              --overrides "$overrides" \
+              --region "$AWS_REGION" \
+              --query 'tasks[0].taskArn' \
+              --output text)"
+
+            if [[ -z "$task_arn" || "$task_arn" == "None" ]]; then
+              echo "Failed to start migration task for command: $migration_command" >&2
+              exit 1
+            fi
+
+            aws ecs wait tasks-stopped \
+              --cluster "$APP_NAME-$TARGET_ENV" \
+              --tasks "$task_arn" \
+              --region "$AWS_REGION"
+
+            local task_id
+            task_id="${task_arn##*/}"
+
+            local task_result
+            task_result="$(aws ecs describe-tasks \
+              --cluster "$APP_NAME-$TARGET_ENV" \
+              --tasks "$task_arn" \
+              --region "$AWS_REGION" \
+              --output json)"
+
+            local exit_code
+            exit_code="$(echo "$task_result" | jq -r '.tasks[0].containers[] | select(.name=="backend") | .exitCode // 1')"
+
+            aws logs tail "/ecs/$APP_NAME-$TARGET_ENV/backend" \
+              --log-stream-names "ecs/backend/$task_id" \
+              --since 1h \
+              --region "$AWS_REGION" || true
+
+            if [[ "$exit_code" != "0" ]]; then
+              echo "Migration task failed for command: $migration_command" >&2
+              echo "$task_result" >&2
+              exit "$exit_code"
+            fi
+          }
+
+          run_migration_task doctor
+          run_migration_task status
+
+          if [[ -n "${BASELINE_THROUGH:-}" ]]; then
+            run_migration_task baseline "--through" "$BASELINE_THROUGH"
+          fi
+
+          if [[ "${APPLY_PENDING}" == "true" ]]; then
+            run_migration_task up
+          fi
+
+          run_migration_task status
+          run_migration_task doctor

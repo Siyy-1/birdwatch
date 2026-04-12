@@ -1,7 +1,9 @@
 import { createHash } from 'node:crypto'
+import { existsSync } from 'node:fs'
 import { readdir, readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { Client } from 'pg'
+import { buildPgClientConfig } from '../config/database.js'
 
 type Command = 'status' | 'up' | 'baseline' | 'doctor'
 
@@ -17,8 +19,23 @@ interface AppliedMigration {
   applied_at: Date
 }
 
-const MIGRATIONS_DIR = resolve(__dirname, '../../../db/migrations')
 const MIGRATIONS_TABLE = 'schema_migrations'
+
+function resolveMigrationsDir(): string {
+  const candidates = [
+    resolve(__dirname, '../../../db/migrations'),
+    resolve(__dirname, '../../db/migrations'),
+  ]
+
+  const found = candidates.find((candidate) => existsSync(candidate))
+  if (!found) {
+    throw new Error(`Could not locate db/migrations. Tried: ${candidates.join(', ')}`)
+  }
+
+  return found
+}
+
+const MIGRATIONS_DIR = resolveMigrationsDir()
 
 async function loadDatabaseUrlFromEnvFile(): Promise<string | undefined> {
   const envFilePath = resolve(__dirname, '../../.env')
@@ -284,7 +301,7 @@ async function runDoctor(client: Client): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  const client = new Client({ connectionString: await getDatabaseUrl() })
+  const client = new Client(buildPgClientConfig(await getDatabaseUrl()))
   const command = getCommand()
 
   await client.connect()

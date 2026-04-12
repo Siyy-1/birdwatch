@@ -8,6 +8,7 @@ import swagger from '@fastify/swagger'
 import swaggerUi from '@fastify/swagger-ui'
 
 import { env } from './config/env.js'
+import { buildPgClientConfig } from './config/database.js'
 import authPlugin from './plugins/auth.js'
 import speciesRoutes from './routes/v1/species.js'
 import sightingsRoutes from './routes/v1/sightings.js'
@@ -61,7 +62,7 @@ export async function buildApp() {
   // ---- DB -----------------------------------------------------------------
 
   await fastify.register(postgres, {
-    connectionString: env.DATABASE_URL,
+    ...buildPgClientConfig(env.DATABASE_URL),
     max: 10,
     idleTimeoutMillis: 30_000,
     connectionTimeoutMillis: 5_000,

@@ -151,23 +151,25 @@ terraform init -migrate-state
 
 용도:
 
-- staging/prod DB에 대해 `doctor/status`만 실행
+- dev/staging/prod DB에 대해 `doctor/status` 실행
 - legacy DB baseline 실행
 - pending migration 수동 적용
 
 동작 방식:
 
 - GitHub Actions OIDC로 AWS 인증
-- SSM Parameter Store의 `/${app_name}/${environment}/database_url`에서 `DATABASE_URL` 조회
-- `backend`의 migration runner 실행
+- 현재 코드로 backend production 이미지를 빌드해 ECR에 push
+- ECS backend 서비스와 같은 VPC/subnet/security group을 재사용한 one-off task 실행
+- task 내부에서 `node dist/scripts/migrate.js ...` 실행
 
-현재 기대 SSM 경로:
+필요 권한:
 
-```text
-/birdwatch/dev/database_url
-/birdwatch/staging/database_url
-/birdwatch/prod/database_url
-```
+- `AWS_DEPLOY_ROLE_ARN`
+  - ECR push
+  - ECS describe/register/run-task
+  - CloudWatch Logs 조회
+- ECS task execution/task role
+  - 기존 backend 서비스와 동일하게 SSM secret 접근 가능해야 함
 
 production 적용 시 보호 장치:
 

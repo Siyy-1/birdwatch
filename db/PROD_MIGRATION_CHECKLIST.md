@@ -199,6 +199,7 @@ GitHub Actions로 실행할 경우:
 - 필요 시 `baseline_through=20260408_000011_create_gallery_tables.sql`
 - 실제 적용이면 `apply_pending=true`
 - production 적용 시 `confirm_production=prod-apply`
+- 실행 방식은 GitHub runner 직접 DB 접속이 아니라 ECS one-off task 방식이어야 한다
 
 ## 7. 운영 적용 후 확인
 
@@ -215,6 +216,26 @@ GitHub Actions로 실행할 경우:
 - 최근 15분 API 5xx 증가 여부
 - DB lock/slow query 이상 여부
 - gallery API 회귀 여부
+
+## 7.5. 트러블슈팅 메모
+
+실제 dev ECS one-off task 검증에서 확인된 대표 실패 패턴:
+
+- `no pg_hba.conf entry ... no encryption`
+  - 원인: ECS/Fargate에서 RDS 접속 시 TLS 없이 접속
+  - 조치: backend 앱과 migration 스크립트가 production/RDS 연결에서 `ssl`을 사용해야 한다
+
+- `password authentication failed for user "birdwatch"`
+  - 원인: SSM `DATABASE_URL`과 실제 RDS master password drift
+  - 조치: SSM을 현재 소스 오브 트루스로 본다면 RDS master password를 해당 값으로 재동기화한 뒤 다시 실행
+
+- `type geography does not exist`
+  - 원인: PostGIS extension 미설치 상태에서 `geography` 타입 migration 실행
+  - 조치: `20260404_000007a_enable_postgis.sql`이 먼저 적용돼야 한다
+
+- `ENOENT: no such file or directory, scandir '/db/migrations'`
+  - 원인: migration runner가 container runtime 경로와 맞지 않는 위치를 탐색
+  - 조치: migration runner가 `src` 실행과 `dist` 실행 둘 다 지원하도록 경로 해석을 사용해야 한다
 
 ## 8. 롤백 판단
 
@@ -260,14 +281,14 @@ baseline 기준 파일:
 
 ## 10. 현재 한계
 
-현재 저장소 기준으로는 운영 배포 파이프라인에 DB migration step이 없다.
+현재 기준 운영 앱 배포 파이프라인은 DB migration을 자동으로 포함하지 않는다.
 
 - ECS 배포는 앱 이미지만 갱신한다.
 - Terraform apply는 인프라만 반영한다.
-- 따라서 운영 DB migration은 아직 수동 release step이다.
+- DB migration은 별도 수동 workflow로 실행해야 한다.
 
 다음 단계 후보:
 
-- GitHub Actions에 staging/prod migration job 추가
-- migration 전용 실행 주체 정리
-- 운영용 `DATABASE_URL` 주입 방식 표준화
+- migration workflow를 main 브랜치에 반영
+- production 환경에서 동일 ECS one-off task 경로 검증
+- 운영용 `DATABASE_URL` / RDS master password drift 방지 절차 정리
