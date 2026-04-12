@@ -9,16 +9,20 @@
  *   - premium 사용자: 무제한
  */
 import type { FastifyPluginAsync } from 'fastify'
-import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3'
-import { readFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3'
+import { readFile, writeFile } from 'node:fs/promises'
 import { env } from '../../config/env.js'
+import {
+  LOCAL_UPLOAD_DIR,
+  getLocalUploadFilePath,
+  markLocalUploadSanitized,
+  stripJpegMetadata,
+} from '../../services/media/serverImageSanitizer.js'
 
 // ── S3 클라이언트 (모듈 로드 시 1회 생성) ────────────────────────────────────
 
 const s3 = new S3Client({ region: env.S3_REGION })
-
-const LOCAL_UPLOAD_DIR = '/tmp/birdwatch-uploads'
+const SERVER_SANITIZED_METADATA_KEY = 'server_sanitized'
 
 // ── 일일 AI 식별 한도 ─────────────────────────────────────────────────────────
 
@@ -77,6 +81,36 @@ async function downloadFromS3(s3Key: string): Promise<Buffer> {
     chunks.push(Buffer.from(chunk))
   }
   return Buffer.concat(chunks)
+}
+
+async function persistServerSanitizedImage(
+  s3Key: string,
+  imageBuffer: Buffer,
+): Promise<void> {
+  if (env.NODE_ENV === 'development') {
+    await writeFile(getLocalUploadFilePath(s3Key), imageBuffer)
+    await markLocalUploadSanitized(s3Key)
+    return
+  }
+
+  await s3.send(new PutObjectCommand({
+    Bucket: env.S3_BUCKET,
+    Key: s3Key,
+    Body: imageBuffer,
+    ContentType: 'image/jpeg',
+    Metadata: {
+      [SERVER_SANITIZED_METADATA_KEY]: 'true',
+    },
+  }))
+}
+
+async function ensureServerSideSanitizedCopy(
+  s3Key: string,
+  imageBuffer: Buffer,
+): Promise<Buffer> {
+  const { sanitizedBuffer } = stripJpegMetadata(imageBuffer)
+  await persistServerSanitizedImage(s3Key, sanitizedBuffer)
+  return sanitizedBuffer
 }
 
 // ── Python TF Serving 래퍼 호출 ───────────────────────────────────────────────
@@ -167,8 +201,9 @@ const aiRoutes: FastifyPluginAsync = async (fastify) => {
         const countResult = await fastify.pg.query<DailyCountRow>(
           `SELECT COUNT(*) AS count
              FROM ai_identification_logs
-             WHERE user_id = $1
-               AND created_at::date = CURRENT_DATE`,
+              WHERE user_id = $1
+                AND (created_at AT TIME ZONE 'Asia/Seoul')::date
+                  = (NOW() AT TIME ZONE 'Asia/Seoul')::date`,
           [userId],
         )
         const todayCount = parseInt(countResult.rows[0].count, 10)
@@ -187,11 +222,12 @@ const aiRoutes: FastifyPluginAsync = async (fastify) => {
       let imageBuffer: Buffer
       try {
         if (env.NODE_ENV === 'development') {
-          const filename = s3_key.replace(/\//g, '_')
-          imageBuffer = await readFile(join(LOCAL_UPLOAD_DIR, filename))
+          imageBuffer = await readFile(getLocalUploadFilePath(s3_key))
         } else {
           imageBuffer = await downloadFromS3(s3_key)
         }
+
+        imageBuffer = await ensureServerSideSanitizedCopy(s3_key, imageBuffer)
       } catch (err) {
         request.log.error(err, '이미지 로드 실패')
         return reply.code(422).send({

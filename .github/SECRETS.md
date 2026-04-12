@@ -29,6 +29,14 @@ GitHub 저장소 Settings → Secrets and variables → Actions 에서 등록합
 
 ## GitHub Environments
 
+### `staging` Environment
+- Settings → Environments → New environment → `staging`
+- DB migration workflow에서 staging 실행 이력을 분리해두려면 생성 권장
+
+### `dev` Environment
+- 현재 저장소 자동화 기준 기본 비프로덕션 환경은 `dev`
+- 별도 GitHub environment는 필수는 아니지만, 실행 이력 분리를 원하면 생성 가능
+
 ### `production` Environment
 - Settings → Environments → New environment → `production`
 - **Required reviewers** 1명 이상 설정 (terraform apply, EAS production 빌드 전 수동 승인)
@@ -108,6 +116,7 @@ aws iam attach-role-policy \
 
 ### GitHub 설정
 - [ ] `production` Environment 생성 + Required reviewers 설정
+- [ ] `staging` Environment 생성 (권장)
 - [ ] `ENVIRONMENT` Variable 등록 (`dev`)
 - [ ] 위 Secrets 전부 등록
 
@@ -117,6 +126,7 @@ aws iam attach-role-policy \
 - [ ] `birdwatch-github-terraform` Role 생성 + ARN을 `AWS_TERRAFORM_ROLE_ARN`에 등록
 - [ ] Terraform S3 backend 버킷 생성: `birdwatch-terraform-state` (ap-northeast-2, versioning on)
 - [ ] Terraform DynamoDB lock 테이블 생성: `birdwatch-terraform-locks`
+- [ ] `AWS_TERRAFORM_ROLE_ARN` Role에 `ssm:GetParameter` / `kms:Decrypt` 권한이 있는지 확인
 
 ### EAS 설정
 - [ ] `expo.dev`에서 프로젝트 생성 → Project ID를 GitHub Variable `EAS_PROJECT_ID`에 등록
@@ -130,3 +140,36 @@ aws iam attach-role-policy \
 cd infra/terraform
 terraform init -migrate-state
 ```
+
+---
+
+## DB Migration Workflow
+
+수동 실행 워크플로우:
+
+- `.github/workflows/db-migrate.yml`
+
+용도:
+
+- staging/prod DB에 대해 `doctor/status`만 실행
+- legacy DB baseline 실행
+- pending migration 수동 적용
+
+동작 방식:
+
+- GitHub Actions OIDC로 AWS 인증
+- SSM Parameter Store의 `/${app_name}/${environment}/database_url`에서 `DATABASE_URL` 조회
+- `backend`의 migration runner 실행
+
+현재 기대 SSM 경로:
+
+```text
+/birdwatch/dev/database_url
+/birdwatch/staging/database_url
+/birdwatch/prod/database_url
+```
+
+production 적용 시 보호 장치:
+
+- GitHub `production` environment 승인
+- workflow input `confirm_production=prod-apply` 필요

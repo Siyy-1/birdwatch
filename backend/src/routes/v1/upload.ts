@@ -4,8 +4,8 @@
  * POST /api/v1/upload/presign
  *   - JWT 인증 필수
  *   - S3 PutObject Presigned URL 발급 (15분 유효)
- *   - Lambda@Edge가 PUT 후 EXIF를 제거함
- *   - 파일당 최대 10MB 제한 (Content-Length-Range 조건)
+ *   - 모바일이 업로드 전 1차 EXIF 제거 후 JPEG로 재인코딩
+ *   - 서버는 AI 식별 직전 업로드 객체를 다시 sanitize해 2차 제거를 보장
  */
 import type { FastifyPluginAsync } from 'fastify'
 import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3'
@@ -27,10 +27,6 @@ const LOCAL_UPLOAD_DIR = '/tmp/birdwatch-uploads'
 
 const ALLOWED_CONTENT_TYPES = new Set([
   'image/jpeg',
-  'image/png',
-  'image/heic',
-  'image/heif',
-  'image/webp',
 ])
 
 const SAFE_S3_KEY_REGEX =
@@ -82,7 +78,7 @@ const uploadRoutes: FastifyPluginAsync = async (fastify) => {
 
       if (!ALLOWED_CONTENT_TYPES.has(content_type)) {
         return reply.code(400).send({
-          error: '지원하지 않는 이미지 형식입니다. JPEG, PNG, HEIC, WEBP만 허용됩니다.',
+          error: '지원하지 않는 이미지 형식입니다. 업로드는 JPEG만 허용됩니다.',
         })
       }
 

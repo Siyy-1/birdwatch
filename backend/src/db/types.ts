@@ -29,9 +29,11 @@ export interface User {
   oauth_sub: string;
   gps_consent: boolean;
   gps_consent_at: Date | null;
-  terms_agreed_at: Date;
-  privacy_agreed_at: Date;
+  terms_agreed_at: Date | null;
+  privacy_agreed_at: Date | null;
   marketing_agreed_at: Date | null;
+  ai_training_opt_in: boolean;
+  ai_training_opt_in_at: Date | null;
   total_points: number;
   streak_days: number;
   last_sighting_at: Date | null;
@@ -43,11 +45,26 @@ export interface User {
   deleted_at: Date | null;
 }
 
+export interface AiFeedback {
+  feedback_id: string;
+  user_id: string;
+  sighting_id: string;
+  photo_s3_key: string;
+  ai_species_id: string | null;
+  ai_confidence: number | null;
+  ai_top3: Array<{ species_id: string; confidence: number }> | null;
+  user_selected_species_id: string;
+  was_corrected: boolean;
+  model_version: string | null;
+  training_consent: boolean;
+  created_at: Date;
+}
+
 export interface Sighting {
   sighting_id: string;          // UUID
   user_id: string;              // UUID → users.user_id
   species_id: string;           // → species.species_id
-  location: { lat: number; lng: number };  // geography → JS 표현
+  location: { lat: number; lng: number } | null;  // geography → JS 표현
   location_accuracy_m: number | null;
   altitude_m: number | null;
   photo_s3_key: string;
@@ -71,7 +88,7 @@ export interface Sighting {
 
 // sightings API 응답: location은 obscure_coordinate 적용 후
 export interface SightingResponse extends Omit<Sighting, 'deleted_at'> {
-  location: { lat: number; lng: number };  // 난독화된 좌표
+  location: { lat: number; lng: number } | null;  // 난독화된 좌표
 }
 
 // species API 응답: 잠긴 종은 상세정보 숨김

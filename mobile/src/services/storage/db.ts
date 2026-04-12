@@ -7,7 +7,7 @@ import * as SQLite from 'expo-sqlite'
 import type { Species, User } from '../../types/api'
 
 const DB_NAME = 'birdwatch.db'
-const SCHEMA_VERSION = 1
+const SCHEMA_VERSION = 2
 
 let _db: SQLite.SQLiteDatabase | null = null
 
@@ -58,6 +58,7 @@ async function migrate(db: SQLite.SQLiteDatabase): Promise<void> {
       nickname          TEXT NOT NULL,
       profile_image_key TEXT,
       gps_consent       INTEGER NOT NULL DEFAULT 0,
+      ai_training_opt_in INTEGER NOT NULL DEFAULT 0,
       total_points      INTEGER NOT NULL DEFAULT 0,
       streak_days       INTEGER NOT NULL DEFAULT 0,
       species_count     INTEGER NOT NULL DEFAULT 0,
@@ -71,6 +72,17 @@ async function migrate(db: SQLite.SQLiteDatabase): Promise<void> {
   )
   if (!versionRow) {
     await db.runAsync('INSERT INTO schema_version (version) VALUES (?)', [SCHEMA_VERSION])
+  } else if (versionRow.version < SCHEMA_VERSION) {
+    const columns = await db.getAllAsync<{ name: string }>('PRAGMA table_info(user_profile)')
+    const hasAiTrainingColumn = columns.some((column) => column.name === 'ai_training_opt_in')
+    if (!hasAiTrainingColumn) {
+      await db.execAsync(`
+        ALTER TABLE user_profile
+        ADD COLUMN ai_training_opt_in INTEGER NOT NULL DEFAULT 0;
+      `)
+    }
+
+    await db.runAsync('UPDATE schema_version SET version = ?', [SCHEMA_VERSION])
   }
 }
 
@@ -149,12 +161,13 @@ export async function upsertUserProfile(db: SQLite.SQLiteDatabase, user: User): 
   const now = Math.floor(Date.now() / 1000)
   await db.runAsync(
     `INSERT OR REPLACE INTO user_profile
-       (user_id, nickname, profile_image_key, gps_consent,
-        total_points, streak_days, species_count, subscription_tier, cached_at)
-     VALUES (?,?,?,?,?,?,?,?,?)`,
+      (user_id, nickname, profile_image_key, gps_consent,
+        ai_training_opt_in, total_points, streak_days, species_count, subscription_tier, cached_at)
+     VALUES (?,?,?,?,?,?,?,?,?,?)`,
     [
       user.user_id, user.nickname, user.profile_image_key ?? null,
       user.gps_consent ? 1 : 0,
+      user.ai_training_opt_in ? 1 : 0,
       user.total_points, user.streak_days, user.species_count,
       user.subscription_tier, now,
     ],
@@ -163,9 +176,9 @@ export async function upsertUserProfile(db: SQLite.SQLiteDatabase, user: User): 
 
 export async function getCachedUserProfile(
   db: SQLite.SQLiteDatabase,
-): Promise<Pick<User, 'user_id' | 'nickname' | 'gps_consent' | 'total_points' | 'streak_days' | 'species_count'> | null> {
+): Promise<Pick<User, 'user_id' | 'nickname' | 'gps_consent' | 'ai_training_opt_in' | 'total_points' | 'streak_days' | 'species_count'> | null> {
   return db.getFirstAsync(
-    'SELECT user_id, nickname, gps_consent, total_points, streak_days, species_count FROM user_profile LIMIT 1',
+    'SELECT user_id, nickname, gps_consent, ai_training_opt_in, total_points, streak_days, species_count FROM user_profile LIMIT 1',
   )
 }
 

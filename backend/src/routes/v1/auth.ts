@@ -18,6 +18,7 @@ interface TokenBody {
   code_verifier: string
   redirect_uri: string
   grant_type: 'authorization_code'
+  oauth_provider: 'kakao' | 'google'
 }
 
 interface AppleBody {
@@ -74,18 +75,19 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
         tags: ['auth'],
         body: {
           type: 'object',
-          required: ['code', 'code_verifier', 'redirect_uri', 'grant_type'],
+          required: ['code', 'code_verifier', 'redirect_uri', 'grant_type', 'oauth_provider'],
           properties: {
             code:          { type: 'string' },
             code_verifier: { type: 'string' },
             redirect_uri:  { type: 'string' },
             grant_type:    { type: 'string', enum: ['authorization_code'] },
+            oauth_provider: { type: 'string', enum: ['kakao', 'google'] },
           },
         },
       },
     },
     async (request, reply) => {
-      const { code, code_verifier, redirect_uri, grant_type } = request.body
+      const { code, code_verifier, redirect_uri, grant_type, oauth_provider } = request.body
 
       // 1. Cognito 토큰 엔드포인트 호출
       const tokenEndpoint = new URL('/oauth2/token', env.COGNITO_DOMAIN)
@@ -141,12 +143,11 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
         // 4. 신규 유저 생성
         const inserted = await fastify.pg.query(
           `INSERT INTO users
-             (user_id, cognito_sub, nickname, subscription_tier, oauth_provider,
-              terms_agreed_at, privacy_agreed_at)
+             (user_id, cognito_sub, oauth_sub, nickname, subscription_tier, oauth_provider)
            VALUES
-             (gen_random_uuid(), $1, $2, 'free', 'kakao', NOW(), NOW())
+             (gen_random_uuid(), $1, $1, $2, 'free', $3)
            RETURNING user_id`,
-          [sub, randomNickname()],
+          [sub, randomNickname(), oauth_provider],
         )
         userId = inserted.rows[0].user_id as string
       }
@@ -214,10 +215,9 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
         const nickname = full_name?.trim() || randomNickname()
         const inserted = await fastify.pg.query(
           `INSERT INTO users
-             (user_id, cognito_sub, nickname, subscription_tier, oauth_provider,
-              terms_agreed_at, privacy_agreed_at)
+             (user_id, cognito_sub, oauth_sub, nickname, subscription_tier, oauth_provider)
            VALUES
-             (gen_random_uuid(), $1, $2, 'free', 'apple', NOW(), NOW())
+             (gen_random_uuid(), $1, $1, $2, 'free', 'apple')
            RETURNING user_id`,
           [sub, nickname],
         )

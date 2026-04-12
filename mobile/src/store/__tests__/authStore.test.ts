@@ -11,7 +11,7 @@ jest.mock('../../services/auth', () => ({
 }))
 
 jest.mock('../../services/api', () => ({
-  usersApi: { me: jest.fn() },
+  usersApi: { me: jest.fn(), update: jest.fn(), updateConsent: jest.fn(), completeOnboarding: jest.fn() },
   apiClient: { post: jest.fn() },
 }))
 
@@ -36,6 +36,8 @@ const mockUser = {
   terms_agreed_at: '2026-01-01T00:00:00Z',
   privacy_agreed_at: '2026-01-01T00:00:00Z',
   marketing_agreed_at: null,
+  ai_training_opt_in: false,
+  ai_training_opt_in_at: null,
   total_points: 0,
   streak_days: 0,
   last_sighting_at: null,
@@ -90,6 +92,27 @@ describe('useAuthStore', () => {
       const state = useAuthStore.getState()
       expect(state.status).toBe('authenticated')
       expect(state.user?.user_id).toBe('user-uuid')
+    })
+
+    it('약관 동의 시각이 없으면 needsOnboarding=true', async () => {
+      mockAuth.restoreSession.mockResolvedValue({
+        userId: 'user-uuid',
+        accessToken: 'token',
+        idToken: null,
+      })
+      mockUsersApi.me.mockResolvedValue({
+        data: {
+          data: {
+            ...mockUser,
+            terms_agreed_at: null,
+            privacy_agreed_at: null,
+          },
+        },
+      } as any)
+
+      await useAuthStore.getState().restoreSession()
+
+      expect(useAuthStore.getState().needsOnboarding).toBe(true)
     })
 
     it('세션 있지만 me() 실패 → status=unauthenticated', async () => {
@@ -162,6 +185,18 @@ describe('useAuthStore', () => {
       useAuthStore.setState({ error: '이전 에러' })
       useAuthStore.getState().clearError()
       expect(useAuthStore.getState().error).toBeNull()
+    })
+  })
+
+  describe('updateAiTrainingOptIn', () => {
+    it('전역 AI 학습 동의를 갱신한다', async () => {
+      useAuthStore.setState({ status: 'authenticated', user: mockUser, userId: 'user-uuid' })
+      mockUsersApi.update.mockResolvedValue({ data: { data: { ai_training_opt_in: true } } } as any)
+
+      await useAuthStore.getState().updateAiTrainingOptIn(true)
+
+      expect((mockUsersApi.update as any).mock.calls[0][0].ai_training_opt_in).toBe(true)
+      expect(useAuthStore.getState().user?.ai_training_opt_in).toBe(true)
     })
   })
 })

@@ -6,6 +6,7 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   Alert,
+  Linking,
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps'
@@ -16,6 +17,7 @@ import { Colors } from '../../src/constants/colors'
 import { formatRelativeTime } from '../../src/utils/time'
 import { sightingsApi } from '../../src/services/api'
 import type { Sighting, Paginated } from '../../src/types/api'
+import { useAuthStore } from '../../src/store/authStore'
 
 const SEOUL = { latitude: 37.5665, longitude: 126.978 }
 const INITIAL_DELTA = { latitudeDelta: 0.08, longitudeDelta: 0.08 }
@@ -32,26 +34,47 @@ type SelectedSighting = {
 export default function MapScreen() {
   const router = useRouter()
   const mapRef = useRef<MapView>(null)
+  const user = useAuthStore((s) => s.user)
 
   const [sightings, setSightings] = useState<Sighting[]>([])
   const [selected, setSelected] = useState<SelectedSighting | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const [myLocation, setMyLocation] = useState<{ latitude: number; longitude: number } | null>(null)
+  const [showLocationBanner, setShowLocationBanner] = useState(false)
 
   useEffect(() => {
     let cancelled = false
+
+    if (!user?.gps_consent) {
+      setMyLocation(null)
+      setShowLocationBanner(true)
+      return () => { cancelled = true }
+    }
+
     Location.requestForegroundPermissionsAsync().then(({ status }) => {
-      if (status !== 'granted') return
+      if (status !== 'granted') {
+        if (!cancelled) {
+          setMyLocation(null)
+          setShowLocationBanner(true)
+        }
+        return
+      }
+
       Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced })
         .then((loc) => {
           if (!cancelled) {
             setMyLocation({ latitude: loc.coords.latitude, longitude: loc.coords.longitude })
+            setShowLocationBanner(false)
           }
         })
-        .catch(() => {})
+        .catch(() => {
+          if (!cancelled) {
+            setShowLocationBanner(true)
+          }
+        })
     })
     return () => { cancelled = true }
-  }, [])
+  }, [user?.gps_consent])
 
   const loadSightings = useCallback(async () => {
     setIsLoading(true)
@@ -89,15 +112,15 @@ export default function MapScreen() {
         style={styles.map}
         provider={PROVIDER_GOOGLE}
         initialRegion={{ ...SEOUL, ...INITIAL_DELTA }}
-        showsUserLocation
+        showsUserLocation={Boolean(user?.gps_consent && myLocation)}
         showsMyLocationButton={false}
         toolbarEnabled={false}
         onPress={() => setSelected(null)}
       >
-        {sightings.map((s) => (
+        {sightings.filter((s) => s.lat != null && s.lng != null).map((s) => (
           <Marker
             key={s.sighting_id}
-            coordinate={{ latitude: s.lat, longitude: s.lng }}
+            coordinate={{ latitude: s.lat!, longitude: s.lng! }}
             onPress={() =>
               setSelected({
                 sighting_id: s.sighting_id,
@@ -122,6 +145,18 @@ export default function MapScreen() {
       <View style={styles.header} pointerEvents="none">
         <Text style={styles.headerTitle}>BirdWatch</Text>
       </View>
+
+      {showLocationBanner ? (
+        <View style={styles.locationBanner}>
+          <Text style={styles.locationBannerText}>위치 권한을 허용하면 현재 위치를 볼 수 있어요</Text>
+          <TouchableOpacity
+            style={styles.locationBannerButton}
+            onPress={() => Linking.openSettings()}
+          >
+            <Text style={styles.locationBannerButtonText}>설정으로 이동</Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
 
       <TouchableOpacity
         style={styles.myLocBtn}
@@ -223,6 +258,33 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: Colors.primary,
     letterSpacing: -0.3,
+  },
+  locationBanner: {
+    position: 'absolute',
+    top: 112,
+    left: 12,
+    right: 72,
+    backgroundColor: 'rgba(27,67,50,0.94)',
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  locationBannerText: {
+    color: Colors.text.inverse,
+    fontSize: 13,
+    marginBottom: 8,
+  },
+  locationBannerButton: {
+    alignSelf: 'flex-start',
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  locationBannerButtonText: {
+    color: Colors.text.inverse,
+    fontSize: 12,
+    fontWeight: '700',
   },
   myLocBtn: {
     position: 'absolute',

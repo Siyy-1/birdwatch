@@ -14,6 +14,7 @@ interface OnboardingState {
   privacyAgreed:   boolean
   marketingAgreed: boolean
   gpsConsented:    boolean
+  aiTrainingOptIn: boolean
 }
 
 interface AuthState {
@@ -38,6 +39,8 @@ interface AuthState {
   signOut:             () => Promise<void>
   refreshUser:         () => Promise<void>
   updateGpsConsent:    (consent: boolean) => Promise<void>
+  updateAiTrainingOptIn: (consent: boolean) => Promise<void>
+  completeOnboarding:  (input: { marketingAgreed: boolean; gpsConsented: boolean; aiTrainingOptIn: boolean }) => Promise<void>
   setOnboarding:       (partial: Partial<OnboardingState>) => void
   clearError:          () => void
 }
@@ -54,6 +57,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     privacyAgreed:   false,
     marketingAgreed: false,
     gpsConsented:    false,
+    aiTrainingOptIn: false,
   },
 
   restoreSession: async () => {
@@ -144,6 +148,31 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     if (!user) return
     await usersApi.updateConsent(consent)
     set({ user: { ...user, gps_consent: consent } })
+  },
+
+  updateAiTrainingOptIn: async (consent: boolean) => {
+    const { user } = get()
+    if (!user) return
+    await usersApi.update({ ai_training_opt_in: consent })
+    set({
+      user: {
+        ...user,
+        ai_training_opt_in: consent,
+        ai_training_opt_in_at: consent ? new Date().toISOString() : null,
+      },
+    })
+  },
+
+  completeOnboarding: async ({ marketingAgreed, gpsConsented, aiTrainingOptIn }) => {
+    await usersApi.completeOnboarding({
+      terms_agreed: true,
+      privacy_agreed: true,
+      marketing_agreed: marketingAgreed,
+      gps_consent: gpsConsented,
+      ai_training_opt_in: aiTrainingOptIn,
+    })
+    await get().refreshUser()
+    set({ needsOnboarding: false })
   },
 
   setOnboarding: (partial) => {

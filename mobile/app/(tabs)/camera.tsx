@@ -4,7 +4,7 @@
  * 플로우:
  * 1. 카메라 권한 요청
  * 2. GPS 동의 확인 (없으면 ConsentModal)
- * 3. 촬영 → S3 업로드 → AI 식별 API 호출
+ * 3. 촬영 → 클라이언트 EXIF 제거 → S3 업로드 → AI 식별 API 호출
  * 4. AI 결과 바텀시트 표시
  * 5. 사용자 확인 → 오프라인 큐 또는 바로 POST /api/v1/sightings
  */
@@ -17,14 +17,11 @@ import {
   ActivityIndicator,
   Alert,
   Modal,
-  Dimensions,
 } from 'react-native'
 import { CameraView, useCameraPermissions } from 'expo-camera'
-import * as FileSystem from 'expo-file-system'
 import * as Location from 'expo-location'
 import * as Network from 'expo-network'
-import { Image } from 'expo-image'
-import { useRouter } from 'expo-router'
+import { useFocusEffect, useRouter } from 'expo-router'
 import {
   GestureHandlerRootView,
   GestureDetector,
@@ -40,10 +37,18 @@ import Animated, {
 
 import { Colors } from '../../src/constants/colors'
 import { useAuthStore } from '../../src/store/authStore'
-import { enqueue } from '../../src/services/storage/offlineQueue'
-import type { QueuedSighting } from '../../src/services/storage/offlineQueue'
-import { sightingsApi, apiClient, galleryApi } from '../../src/services/api'
-import type { AiIdentifyResult } from '../../src/types/api'
+import {
+  completePendingReview,
+  enqueuePendingPhoto,
+  enqueuePendingSighting,
+  getNextPendingReview,
+  type PendingReviewItem,
+} from '../../src/services/storage/offlineQueue'
+import { persistSanitizedImageForQueue, sanitizeImageForUpload } from '../../src/services/media/imageSanitizer'
+import { identifyPhotoByS3Key, uploadPhotoAsset } from '../../src/services/media/photoPipeline'
+import { sightingsApi, galleryApi } from '../../src/services/api'
+import type { AiIdentifyResult, CreateSightingRequest } from '../../src/types/api'
+import { AIResultReviewSheet } from '../../src/components/AIResultReviewSheet'
 
 // ---------------------------------------------------------------------------
 // 상수
@@ -83,11 +88,17 @@ function sliderYToMag(y: number): number {
 
 const PRESET_MAGNIFICATIONS = [1, 2, 5] as const
 
-type CameraState = 'ready' | 'capturing' | 'uploading' | 'identifying' | 'result'
+type CameraState = 'ready' | 'capturing' | 'sanitizing' | 'uploading' | 'identifying' | 'result'
 
 interface CapturedPhoto {
   uri: string
   s3Key: string
+}
+
+interface CapturedLocation {
+  lat: number | null
+  lng: number | null
+  locationAccuracyM?: number
 }
 
 interface CelebrationData {
@@ -293,6 +304,7 @@ export default function CameraScreen() {
   const [cameraState, setCameraState] = useState<CameraState>('ready')
   const [capturedPhoto, setCapturedPhoto] = useState<CapturedPhoto | null>(null)
   const [aiResult, setAiResult] = useState<AiIdentifyResult | null>(null)
+  const [queuedReview, setQueuedReview] = useState<PendingReviewItem | null>(null)
   const [showGpsConsent, setShowGpsConsent] = useState(false)
   const [celebrationData, setCelebrationData] = useState<CelebrationData | null>(null)
   const [sharePrompt, setSharePrompt] = useState<{
@@ -325,6 +337,31 @@ export default function CameraScreen() {
   useEffect(() => {
     currentMagShared.value = magnification
   }, [magnification, currentMagShared])
+
+  const loadPendingReview = useCallback(async () => {
+    if (cameraState !== 'ready' || capturedPhoto || aiResult) return
+
+    try {
+      const pending = await getNextPendingReview()
+      if (!pending) return
+
+      setQueuedReview(pending)
+      setCapturedPhoto({
+        uri: pending.payload.local_photo_uri,
+        s3Key: pending.payload.photo_s3_key,
+      })
+      setAiResult(pending.payload.ai_result)
+      setCameraState('result')
+    } catch {
+      // 대기 검토 불러오기 실패는 조용히 처리
+    }
+  }, [cameraState, capturedPhoto, aiResult])
+
+  useFocusEffect(
+    useCallback(() => {
+      loadPendingReview()
+    }, [loadPendingReview]),
+  )
 
   // ---------------------------------------------------------------------------
   // 줌 핸들러
@@ -409,60 +446,26 @@ export default function CameraScreen() {
   // 촬영
   // ---------------------------------------------------------------------------
 
-  const handleCapture = async () => {
+  const captureAndIdentify = async () => {
     if (cameraState !== 'ready' || !cameraRef.current) return
-
-    // GPS 동의 확인
-    if (!user?.gps_consent) {
-      setShowGpsConsent(true)
-      return
-    }
 
     setCameraState('capturing')
     try {
       const photo = await cameraRef.current.takePictureAsync({ quality: 0.85 })
       if (!photo) return
 
+      setCameraState('sanitizing')
+      const sanitizedPhoto = await sanitizeImageForUpload(photo.uri)
+
       setCameraState('uploading')
-
-      // S3 Presigned URL 요청 → 업로드
-      const { data: presignData } = await apiClient.post<{ data: { upload_url: string; s3_key: string } }>(
-        '/api/v1/upload/presign',
-        { content_type: 'image/jpeg' },
-      )
-      const { upload_url, s3_key } = presignData.data
-
-      const isLocalUploadUrl = upload_url.includes('localhost') || upload_url.includes('127.0.0.1')
-
-      if (isLocalUploadUrl) {
-        const base64 = await FileSystem.readAsStringAsync(photo.uri, {
-          encoding: FileSystem.EncodingType.Base64,
-        })
-        await apiClient.post(upload_url, { s3_key, data: base64 })
-      } else {
-        const uploadResult = await FileSystem.uploadAsync(upload_url, photo.uri, {
-          httpMethod: 'PUT',
-          uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
-          headers: {
-            'Content-Type': 'image/jpeg',
-          },
-        })
-
-        if (uploadResult.status < 200 || uploadResult.status >= 300) {
-          throw new Error(`S3 upload failed with status ${uploadResult.status}`)
-        }
-      }
-
-      const captured: CapturedPhoto = { uri: photo.uri, s3Key: s3_key }
+      const { s3Key } = await uploadPhotoAsset(sanitizedPhoto)
+      const captured: CapturedPhoto = { uri: sanitizedPhoto.uri, s3Key }
       setCapturedPhoto(captured)
 
       // AI 식별
       setCameraState('identifying')
-      const { data: identifyData } = await apiClient.post<{ data: AiIdentifyResult }>(
-        '/api/v1/ai/identify',
-        { s3_key },
-      )
-      setAiResult(identifyData.data)
+      const identifyData = await identifyPhotoByS3Key(s3Key)
+      setAiResult(identifyData)
       setCameraState('result')
     } catch (err) {
       Alert.alert('촬영 오류', err instanceof Error ? err.message : '다시 시도해주세요')
@@ -470,39 +473,109 @@ export default function CameraScreen() {
     }
   }
 
+  const resolveCurrentLocation = async (): Promise<CapturedLocation> => {
+    if (!user?.gps_consent) {
+      return { lat: null, lng: null }
+    }
+
+    try {
+      const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High })
+      return {
+        lat: loc.coords.latitude,
+        lng: loc.coords.longitude,
+        locationAccuracyM:
+          loc.coords.accuracy != null && Number.isFinite(loc.coords.accuracy)
+            ? Math.round(loc.coords.accuracy)
+            : undefined,
+      }
+    } catch {
+      return { lat: null, lng: null }
+    }
+  }
+
+  const queueOfflineCapture = async () => {
+    if (!cameraRef.current || cameraState !== 'ready') return
+
+    setCameraState('capturing')
+
+    try {
+      const photo = await cameraRef.current.takePictureAsync({ quality: 0.85 })
+      if (!photo) {
+        setCameraState('ready')
+        return
+      }
+
+      setCameraState('sanitizing')
+      const sanitizedPhoto = await persistSanitizedImageForQueue(photo.uri)
+      const location = await resolveCurrentLocation()
+
+      await enqueuePendingPhoto({
+        kind: 'identify_and_review',
+        local_photo_uri: sanitizedPhoto.uri,
+        lat: location.lat,
+        lng: location.lng,
+        location_accuracy_m: location.locationAccuracyM,
+        observed_at: new Date().toISOString(),
+      })
+
+      Alert.alert('오프라인', '사진을 보관했습니다. 연결 복구 후 확인하면 분석과 저장을 진행합니다.')
+      setCameraState('ready')
+      setMagnification(1)
+    } catch (err) {
+      Alert.alert('오프라인 보관 실패', err instanceof Error ? err.message : '다시 시도해주세요')
+      setCameraState('ready')
+    }
+  }
+
+  const startCaptureFlow = async () => {
+    const network = await Network.getNetworkStateAsync()
+    if (!network.isConnected || !network.isInternetReachable) {
+      await queueOfflineCapture()
+      return
+    }
+
+    await captureAndIdentify()
+  }
+
+  const handleCapture = async () => {
+    if (cameraState !== 'ready' || !cameraRef.current) return
+
+    if (!user?.gps_consent) {
+      setShowGpsConsent(true)
+      return
+    }
+
+    await startCaptureFlow()
+  }
+
   // ---------------------------------------------------------------------------
   // 목격 저장 (AI 결과 확인 후)
   // ---------------------------------------------------------------------------
 
-  const handleSaveSighting = async (speciesId: string) => {
+  const handleSaveSighting = async (
+    speciesId: string,
+    speciesName: string,
+    rarityTier: string,
+    aiTrainingConsent: boolean,
+  ) => {
     if (!capturedPhoto || !aiResult) return
 
     const observed_at = new Date().toISOString()
-    let lat: number | null = null
-    let lng: number | null = null
+    const location = await resolveCurrentLocation()
 
-    // 위치 취득 (GPS 동의한 경우만)
-    if (user?.gps_consent) {
-      try {
-        const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High })
-        lat = loc.coords.latitude
-        lng = loc.coords.longitude
-      } catch {
-        // GPS 실패 시 null 유지
-      }
-    }
-
-    const sightingPayload: QueuedSighting = {
+    const sightingPayload: CreateSightingRequest = {
       species_id:       speciesId,
-      lat,
-      lng,
+      lat: location.lat,
+      lng: location.lng,
+      location_accuracy_m: location.locationAccuracyM,
       photo_s3_key:     capturedPhoto.s3Key,
-      exif_stripped:    true,   // S3 업로드 전 Lambda@Edge에서 처리
+      exif_stripped:    true,   // 클라이언트 재인코딩 + 서버/Lambda 2차 제거
       ai_species_id:    aiResult.species_id,
       ai_confidence:    aiResult.confidence,
       ai_top3:          aiResult.top3.map((t) => ({ species_id: t.species.species_id, confidence: t.confidence })),
       ai_model_version: aiResult.model_version,
       ai_inference_ms:  aiResult.inference_ms,
+      ai_training_consent: aiTrainingConsent,
       observed_at,
     }
 
@@ -514,7 +587,7 @@ export default function CameraScreen() {
 
         setCameraState('ready')
 
-        const rarity = aiResult.species.rarity_tier ?? 'common'
+        const rarity = rarityTier ?? 'common'
         const canShare =
           capturedPhoto != null &&
           rarity !== 'rare' &&
@@ -522,7 +595,7 @@ export default function CameraScreen() {
 
         const celebData: CelebrationData | null = responseData.is_first_for_user
           ? {
-              species_name: aiResult.species.name_ko,
+              species_name: speciesName,
               points: responseData.points_earned,
               rarity_tier: rarity,
             }
@@ -535,7 +608,7 @@ export default function CameraScreen() {
           pendingCelebrationRef.current = celebData
           setSharePrompt({
             sighting_id: responseData.sighting_id,
-            species_name: aiResult.species.name_ko,
+            species_name: speciesName,
           })
         } else {
           if (celebData) {
@@ -546,19 +619,55 @@ export default function CameraScreen() {
         }
       } catch {
         // 온라인인데 실패 → 큐에 넣기
-        await enqueue(sightingPayload)
+        await enqueuePendingSighting(sightingPayload)
         setCameraState('ready')
         setCapturedPhoto(null)
         setAiResult(null)
+        setQueuedReview(null)
         router.push('/(tabs)/collection')
       }
     } else {
-      await enqueue(sightingPayload)
-      Alert.alert('오프라인', '네트워크 연결 시 자동으로 업로드됩니다.')
+      await enqueuePendingSighting(sightingPayload)
+      Alert.alert('오프라인', '목격 기록을 보관했습니다. 연결 복구 후 확인하면 업로드를 진행합니다.')
       setCameraState('ready')
       setCapturedPhoto(null)
       setAiResult(null)
+      setQueuedReview(null)
       router.push('/(tabs)/collection')
+    }
+  }
+
+  const handleQueuedReviewSave = async (speciesId: string, aiTrainingConsent: boolean) => {
+    if (!queuedReview || !capturedPhoto || !aiResult) return
+
+    try {
+      await completePendingReview(
+        queuedReview.queue_id,
+        queuedReview.payload,
+        speciesId,
+        aiTrainingConsent,
+      )
+
+      setQueuedReview(null)
+      setCapturedPhoto(null)
+      setAiResult(null)
+      setCameraState('ready')
+      setMagnification(1)
+
+      const nextReview = await getNextPendingReview()
+      if (nextReview) {
+        setQueuedReview(nextReview)
+        setCapturedPhoto({
+          uri: nextReview.payload.local_photo_uri,
+          s3Key: nextReview.payload.photo_s3_key,
+        })
+        setAiResult(nextReview.payload.ai_result)
+        setCameraState('result')
+      } else {
+        router.push('/(tabs)/collection')
+      }
+    } catch (err) {
+      Alert.alert('저장 실패', err instanceof Error ? err.message : '다시 시도해주세요')
     }
   }
 
@@ -594,6 +703,7 @@ export default function CameraScreen() {
                   <ActivityIndicator size="large" color="#FFFFFF" />
                   <Text style={styles.statusText}>
                     {cameraState === 'capturing'   ? '촬영 중...' :
+                     cameraState === 'sanitizing'  ? '사진 정리 중...' :
                      cameraState === 'uploading'   ? '업로드 중...' :
                      cameraState === 'identifying' ? 'AI 분석 중...' : ''}
                   </Text>
@@ -622,16 +732,25 @@ export default function CameraScreen() {
           </View>
         </>
       ) : (
-        // AI 결과 화면
-        <AIResultView
-          photo={capturedPhoto!}
+        <AIResultReviewSheet
+          photoUri={capturedPhoto!.uri}
           result={aiResult!}
-          onConfirm={handleSaveSighting}
-          onRetake={() => {
+          defaultTrainingConsent={user?.ai_training_opt_in ?? false}
+          mode={queuedReview ? 'queued' : 'live'}
+          onConfirm={({ speciesId, speciesName, rarityTier, aiTrainingConsent }) => {
+            if (queuedReview) {
+              void handleQueuedReviewSave(speciesId, aiTrainingConsent)
+            } else {
+              void handleSaveSighting(speciesId, speciesName, rarityTier, aiTrainingConsent)
+            }
+          }}
+          onSecondaryAction={() => {
             setCameraState('ready')
+            if (queuedReview) {
+              setQueuedReview(null)
+            }
             setCapturedPhoto(null)
             setAiResult(null)
-            // 세션 종료 후 줌 초기화
             setMagnification(1)
           }}
         />
@@ -643,9 +762,12 @@ export default function CameraScreen() {
         onAgree={async () => {
           await updateGpsConsent(true)
           setShowGpsConsent(false)
-          handleCapture()
+          await startCaptureFlow()
         }}
-        onSkip={() => setShowGpsConsent(false)}
+        onSkip={async () => {
+          setShowGpsConsent(false)
+          await startCaptureFlow()
+        }}
       />
 
       {/* 갤러리 공유 모달 */}
@@ -664,83 +786,6 @@ export default function CameraScreen() {
         }}
       />
     </GestureHandlerRootView>
-  )
-}
-
-// ---------------------------------------------------------------------------
-// AI 결과 뷰
-// ---------------------------------------------------------------------------
-
-function AIResultView({
-  photo,
-  result,
-  onConfirm,
-  onRetake,
-}: {
-  photo: CapturedPhoto
-  result: AiIdentifyResult
-  onConfirm: (speciesId: string) => void
-  onRetake: () => void
-}) {
-  const confidence = Math.round(result.confidence * 100)
-  const isHighConfidence = result.confidence >= 0.85
-
-  return (
-    <View style={styles.resultContainer}>
-      <Image source={{ uri: photo.uri }} style={styles.resultPhoto} contentFit="cover" />
-
-      <View style={styles.resultSheet}>
-        <Text style={styles.resultTitle}>AI 식별 결과</Text>
-
-        {/* 1위 결과 */}
-        <View style={[styles.resultCard, isHighConfidence && styles.resultCardHigh]}>
-          <View style={styles.resultCardHeader}>
-            <View>
-              <Text style={styles.resultSpeciesKo}>{result.species.name_ko}</Text>
-              <Text style={styles.resultSpeciesSci}>{result.species.name_sci}</Text>
-            </View>
-            <View style={[styles.confidenceBadge, isHighConfidence && styles.confidenceBadgeHigh]}>
-              <Text style={styles.confidenceText}>{confidence}%</Text>
-            </View>
-          </View>
-          {result.species.fun_fact_ko && (
-            <Text style={styles.funFact}>{result.species.fun_fact_ko}</Text>
-          )}
-        </View>
-
-        {/* Top 3 */}
-        {result.top3.length > 1 && (
-          <View style={styles.top3}>
-            <Text style={styles.top3Title}>다른 가능성</Text>
-            {result.top3.slice(1).map((item) => (
-              <TouchableOpacity
-                key={item.species.species_id}
-                style={styles.top3Item}
-                onPress={() => onConfirm(item.species.species_id)}
-              >
-                <Text style={styles.top3Name}>{item.species.name_ko}</Text>
-                <Text style={styles.top3Confidence}>{Math.round(item.confidence * 100)}%</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-        )}
-
-        {/* 버튼 */}
-        <View style={styles.resultButtons}>
-          <TouchableOpacity style={styles.retakeBtn} onPress={onRetake}>
-            <Text style={styles.retakeBtnText}>다시 찍기</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.confirmBtn}
-            onPress={() => onConfirm(result.species_id)}
-          >
-            <Text style={styles.confirmBtnText}>
-              {isHighConfidence ? '✓ 목격 기록' : '이대로 기록'}
-            </Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-    </View>
   )
 }
 
@@ -918,49 +963,6 @@ const styles = StyleSheet.create({
   captureBtnInner: {
     width: 56, height: 56, borderRadius: 28, backgroundColor: '#FFFFFF',
   },
-  // Result
-  resultContainer: { flex: 1 },
-  resultPhoto: { flex: 1 },
-  resultSheet: {
-    position: 'absolute', bottom: 0, left: 0, right: 0,
-    backgroundColor: '#FFFFFF', borderTopLeftRadius: 24, borderTopRightRadius: 24,
-    padding: 24, gap: 16,
-  },
-  resultTitle: { fontSize: 13, color: '#AEAEB2', fontWeight: '600', textTransform: 'uppercase' },
-  resultCard: {
-    backgroundColor: '#F8F9FA', borderRadius: 14, padding: 16, gap: 8,
-    borderWidth: 2, borderColor: 'transparent',
-  },
-  resultCardHigh: { borderColor: '#52B788' },
-  resultCardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
-  resultSpeciesKo: { fontSize: 22, fontWeight: '700', color: '#1C1C1E' },
-  resultSpeciesSci: { fontSize: 14, color: '#6C6C70', fontStyle: 'italic' },
-  confidenceBadge: {
-    backgroundColor: '#F2F2F7', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8,
-  },
-  confidenceBadgeHigh: { backgroundColor: '#D8F3DC' },
-  confidenceText: { fontSize: 15, fontWeight: '700', color: '#1C1C1E' },
-  funFact: { fontSize: 13, color: '#6C6C70', lineHeight: 18 },
-  top3: { gap: 8 },
-  top3Title: { fontSize: 13, color: '#AEAEB2', fontWeight: '600' },
-  top3Item: {
-    flexDirection: 'row', justifyContent: 'space-between',
-    paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: '#F2F2F7',
-  },
-  top3Name: { fontSize: 15, color: '#1C1C1E' },
-  top3Confidence: { fontSize: 15, color: '#AEAEB2' },
-  resultButtons: { flexDirection: 'row', gap: 12, marginTop: 8 },
-  retakeBtn: {
-    flex: 1, height: 48, borderRadius: 12,
-    borderWidth: 1.5, borderColor: '#E0E0E0',
-    justifyContent: 'center', alignItems: 'center',
-  },
-  retakeBtnText: { fontSize: 15, fontWeight: '600', color: '#1C1C1E' },
-  confirmBtn: {
-    flex: 2, height: 48, borderRadius: 12,
-    backgroundColor: '#1B4332', justifyContent: 'center', alignItems: 'center',
-  },
-  confirmBtnText: { fontSize: 15, fontWeight: '600', color: '#FFFFFF' },
   // Modal
   modalOverlay: {
     flex: 1, backgroundColor: 'rgba(0,0,0,0.5)',

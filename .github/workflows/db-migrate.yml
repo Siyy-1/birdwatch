@@ -1,0 +1,168 @@
+name: DB Migration
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_environment:
+        description: "Target database environment"
+        required: true
+        default: "dev"
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
+      apply_pending:
+        description: "Apply pending migrations after checks"
+        required: true
+        default: false
+        type: boolean
+      baseline_through:
+        description: "Optional baseline cutoff file, e.g. 20260408_000011_create_gallery_tables.sql"
+        required: false
+        type: string
+      confirm_production:
+        description: "Required only for prod apply: type prod-apply"
+        required: false
+        type: string
+
+jobs:
+  migrate-nonprod:
+    name: Migrate non-production
+    if: ${{ inputs.target_environment == 'dev' || inputs.target_environment == 'staging' }}
+    runs-on: ubuntu-latest
+    concurrency:
+      group: db-migrate-${{ inputs.target_environment }}
+      cancel-in-progress: false
+    permissions:
+      id-token: write
+      contents: read
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      APP_NAME: birdwatch
+      TARGET_ENV: ${{ inputs.target_environment }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_TERRAFORM_ROLE_ARN }}
+          aws-region: ap-northeast-2
+
+      - name: Load DATABASE_URL from SSM
+        shell: bash
+        run: |
+          DATABASE_URL="$(aws ssm get-parameter \
+            --name "/${APP_NAME}/${TARGET_ENV}/database_url" \
+            --with-decryption \
+            --query 'Parameter.Value' \
+            --output text)"
+          echo "DATABASE_URL=$DATABASE_URL" >> "$GITHUB_ENV"
+
+      - name: Pre-flight doctor
+        run: npm run db:migrate:doctor
+
+      - name: Pre-flight status
+        run: npm run db:migrate:status
+
+      - name: Baseline existing migrations
+        if: ${{ inputs.baseline_through != '' }}
+        run: npm run db:migrate:baseline -- --through ${{ inputs.baseline_through }}
+
+      - name: Apply pending migrations
+        if: ${{ inputs.apply_pending }}
+        run: npm run db:migrate
+
+      - name: Post-flight status
+        run: npm run db:migrate:status
+
+      - name: Post-flight doctor
+        run: npm run db:migrate:doctor
+
+  migrate-prod:
+    name: Migrate production
+    if: ${{ inputs.target_environment == 'prod' }}
+    runs-on: ubuntu-latest
+    environment: production
+    concurrency:
+      group: db-migrate-prod
+      cancel-in-progress: false
+    permissions:
+      id-token: write
+      contents: read
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      APP_NAME: birdwatch
+      TARGET_ENV: prod
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Guard production apply confirmation
+        if: ${{ inputs.apply_pending }}
+        shell: bash
+        run: |
+          if [ "${{ inputs.confirm_production }}" != "prod-apply" ]; then
+            echo "For production apply, set confirm_production to prod-apply."
+            exit 1
+          fi
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_TERRAFORM_ROLE_ARN }}
+          aws-region: ap-northeast-2
+
+      - name: Load DATABASE_URL from SSM
+        shell: bash
+        run: |
+          DATABASE_URL="$(aws ssm get-parameter \
+            --name "/${APP_NAME}/${TARGET_ENV}/database_url" \
+            --with-decryption \
+            --query 'Parameter.Value' \
+            --output text)"
+          echo "DATABASE_URL=$DATABASE_URL" >> "$GITHUB_ENV"
+
+      - name: Pre-flight doctor
+        run: npm run db:migrate:doctor
+
+      - name: Pre-flight status
+        run: npm run db:migrate:status
+
+      - name: Baseline existing migrations
+        if: ${{ inputs.baseline_through != '' }}
+        run: npm run db:migrate:baseline -- --through ${{ inputs.baseline_through }}
+
+      - name: Apply pending migrations
+        if: ${{ inputs.apply_pending }}
+        run: npm run db:migrate
+
+      - name: Post-flight status
+        run: npm run db:migrate:status
+
+      - name: Post-flight doctor
+        run: npm run db:migrate:doctor

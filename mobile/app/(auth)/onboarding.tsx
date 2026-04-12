@@ -14,7 +14,6 @@ import {
 } from 'react-native'
 import { useRouter } from 'expo-router'
 import { useAuthStore } from '../../src/store/authStore'
-import { usersApi } from '../../src/services/api'
 
 type Step = 'terms' | 'privacy' | 'gps'
 
@@ -27,10 +26,11 @@ export default function OnboardingScreen() {
     privacy:   false,
     marketing: false,
     gps:       false,
+    aiTraining: false,
   })
   const [isLoading, setIsLoading] = useState(false)
   const router = useRouter()
-  const { user, updateGpsConsent } = useAuthStore()
+  const { completeOnboarding } = useAuthStore()
 
   const stepIndex = STEPS.indexOf(currentStep)
 
@@ -49,10 +49,11 @@ export default function OnboardingScreen() {
     // 최종 단계: 동의 저장 후 앱으로
     setIsLoading(true)
     try {
-      // GPS 동의 업데이트 (PIPA 제15조)
-      if (agreed.gps) {
-        await updateGpsConsent(true)
-      }
+      await completeOnboarding({
+        marketingAgreed: agreed.marketing,
+        gpsConsented: agreed.gps,
+        aiTrainingOptIn: agreed.aiTraining,
+      })
       router.replace('/(tabs)')
     } catch {
       Alert.alert('오류', '동의 저장 중 오류가 발생했습니다. 다시 시도해주세요.')
@@ -84,8 +85,10 @@ export default function OnboardingScreen() {
           <PrivacyStep
             agreed={agreed.privacy}
             marketingAgreed={agreed.marketing}
+            aiTrainingAgreed={agreed.aiTraining}
             onAgree={(v) => setAgreed((s) => ({ ...s, privacy: v }))}
             onMarketingAgree={(v) => setAgreed((s) => ({ ...s, marketing: v }))}
+            onAiTrainingAgree={(v) => setAgreed((s) => ({ ...s, aiTraining: v }))}
           />
         )}
         {currentStep === 'gps' && (
@@ -143,12 +146,14 @@ function TermsStep({ agreed, onAgree }: { agreed: boolean; onAgree: (v: boolean)
 }
 
 function PrivacyStep({
-  agreed, marketingAgreed, onAgree, onMarketingAgree,
+  agreed, marketingAgreed, aiTrainingAgreed, onAgree, onMarketingAgree, onAiTrainingAgree,
 }: {
   agreed: boolean
   marketingAgreed: boolean
+  aiTrainingAgreed: boolean
   onAgree: (v: boolean) => void
   onMarketingAgree: (v: boolean) => void
+  onAiTrainingAgree: (v: boolean) => void
 }) {
   return (
     <View style={styles.step}>
@@ -178,6 +183,19 @@ function PrivacyStep({
         </View>
         <Text style={styles.checkLabel}>마케팅 정보 수신에 동의합니다 (선택)</Text>
       </TouchableOpacity>
+
+      <TouchableOpacity style={styles.checkRow} onPress={() => onAiTrainingAgree(!aiTrainingAgreed)}>
+        <View style={[styles.checkbox, aiTrainingAgreed && styles.checkboxChecked]}>
+          {aiTrainingAgreed && <Text style={styles.checkmark}>✓</Text>}
+        </View>
+        <Text style={styles.checkLabel}>
+          촬영 이미지를 AI 품질 개선과 재학습에 활용하는 데 동의합니다 (선택)
+        </Text>
+      </TouchableOpacity>
+
+      <Text style={styles.optionalNote}>
+        동의하지 않아도 앱 기능은 동일하게 사용할 수 있으며, 설정에서 언제든 변경할 수 있습니다.
+      </Text>
     </View>
   )
 }
@@ -303,6 +321,11 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: '#1C1C1E',
     flex: 1,
+  },
+  optionalNote: {
+    fontSize: 13,
+    color: '#6C6C70',
+    lineHeight: 18,
   },
   gpsInfoBox: {
     flexDirection: 'row',

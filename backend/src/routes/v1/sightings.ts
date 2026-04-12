@@ -7,14 +7,16 @@
  *         is_owner = sighting.user_id === request.user.userId
  */
 import type { FastifyPluginAsync } from 'fastify'
+import { HeadObjectCommand, S3Client } from '@aws-sdk/client-s3'
 import { env } from '../../config/env.js'
+import { isLocalUploadSanitized } from '../../services/media/serverImageSanitizer.js'
 
 // ---- 타입 ----------------------------------------------------------------
 
 interface CreateSightingBody {
   species_id: string
-  lat: number
-  lng: number
+  lat?: number | null
+  lng?: number | null
   location_accuracy_m?: number
   altitude_m?: number
   photo_s3_key: string
@@ -25,6 +27,7 @@ interface CreateSightingBody {
   ai_top3?: Array<{ species_id: string; confidence: number }>
   ai_model_version?: string
   ai_inference_ms?: number
+  ai_training_consent?: boolean
   observed_at: string  // ISO 8601
 }
 
@@ -36,6 +39,24 @@ interface SightingsListQuery {
 
 interface SightingParams {
   id: string
+}
+
+const s3 = new S3Client({ region: env.S3_REGION })
+const SERVER_SANITIZED_METADATA_KEY = 'server_sanitized'
+
+async function hasServerSideSanitizationProof(photoS3Key: string): Promise<boolean> {
+  if (env.NODE_ENV === 'test') return true
+
+  if (env.NODE_ENV === 'development') {
+    return isLocalUploadSanitized(photoS3Key)
+  }
+
+  const response = await s3.send(new HeadObjectCommand({
+    Bucket: env.S3_BUCKET,
+    Key: photoS3Key,
+  }))
+
+  return response.Metadata?.[SERVER_SANITIZED_METADATA_KEY] === 'true'
 }
 
 // ---- 라우터 ---------------------------------------------------------------
@@ -203,7 +224,7 @@ const sightingsRoutes: FastifyPluginAsync = async (fastify) => {
 
   /**
    * POST /api/v1/sightings
-   * PIPA: gps_consent 확인 필수. exif_stripped 검증.
+   * PIPA: gps_consent 확인 필수. 클라이언트/서버 EXIF 제거 전제 검증.
    */
   fastify.post<{ Body: CreateSightingBody }>(
     '/',
@@ -214,11 +235,11 @@ const sightingsRoutes: FastifyPluginAsync = async (fastify) => {
         security: [{ bearerAuth: [] }],
         body: {
           type: 'object',
-          required: ['species_id', 'lat', 'lng', 'photo_s3_key', 'exif_stripped', 'observed_at'],
+          required: ['species_id', 'photo_s3_key', 'exif_stripped', 'observed_at'],
           properties: {
             species_id:         { type: 'string', pattern: '^KR-\\d{3}$' },
-            lat:                { type: 'number', minimum: -90,  maximum: 90 },
-            lng:                { type: 'number', minimum: -180, maximum: 180 },
+            lat:                { type: ['number', 'null'], minimum: -90,  maximum: 90 },
+            lng:                { type: ['number', 'null'], minimum: -180, maximum: 180 },
             location_accuracy_m: { type: 'integer', minimum: 0 },
             altitude_m:         { type: 'number' },
             photo_s3_key:       { type: 'string', minLength: 1, maxLength: 500 },
@@ -229,6 +250,7 @@ const sightingsRoutes: FastifyPluginAsync = async (fastify) => {
             ai_top3:            { type: 'array', maxItems: 3 },
             ai_model_version:   { type: 'string', maxLength: 20 },
             ai_inference_ms:    { type: 'integer', minimum: 0 },
+            ai_training_consent:{ type: 'boolean' },
             observed_at:        { type: 'string', format: 'date-time' },
           },
         },
@@ -237,27 +259,45 @@ const sightingsRoutes: FastifyPluginAsync = async (fastify) => {
     async (request, reply) => {
       const userId = request.user.userId
       const body = request.body
+      const hasLocation = body.lat != null && body.lng != null
+      const hasPartialLocation = (body.lat == null) !== (body.lng == null)
 
-      // PIPA 제15조: GPS 동의 확인
-      const consentResult = await fastify.pg.query<{ gps_consent: boolean }>(
-        'SELECT gps_consent FROM users WHERE user_id = $1 AND deleted_at IS NULL',
+      if (hasPartialLocation) {
+        return reply.code(400).send({
+          error: '위치 정보는 위도와 경도를 함께 보내야 합니다',
+          code: 'INVALID_LOCATION_PAYLOAD',
+        })
+      }
+
+      // PIPA 제15조: 좌표를 저장할 때만 GPS 동의 확인
+      const consentResult = await fastify.pg.query<{ gps_consent: boolean; ai_training_opt_in: boolean }>(
+        'SELECT gps_consent, ai_training_opt_in FROM users WHERE user_id = $1 AND deleted_at IS NULL',
         [userId],
       )
       if (consentResult.rowCount === 0) {
         return reply.code(401).send({ error: '사용자를 찾을 수 없습니다' })
       }
-      if (!consentResult.rows[0].gps_consent) {
+      if (hasLocation && !consentResult.rows[0].gps_consent) {
         return reply.code(403).send({
           error: 'GPS 위치정보 수집에 동의하지 않았습니다',
           code: 'GPS_CONSENT_REQUIRED',
         })
       }
+      const trainingConsent = body.ai_training_consent ?? consentResult.rows[0].ai_training_opt_in
 
       // PIPA: EXIF 제거 확인
       if (!body.exif_stripped) {
         return reply.code(422).send({
           error: 'EXIF가 제거되지 않은 사진은 업로드할 수 없습니다',
           code: 'EXIF_NOT_STRIPPED',
+        })
+      }
+
+      const serverSanitized = await hasServerSideSanitizationProof(body.photo_s3_key)
+      if (!serverSanitized) {
+        return reply.code(422).send({
+          error: '서버 측 사진 정리가 완료되지 않았습니다. 다시 분석 후 저장해 주세요.',
+          code: 'SERVER_SANITIZATION_REQUIRED',
         })
       }
 
@@ -296,6 +336,7 @@ const sightingsRoutes: FastifyPluginAsync = async (fastify) => {
 
       // 사진 CDN URL 생성 (CloudFront)
       const photoCdnUrl = `https://${env.CLOUDFRONT_DOMAIN}/${body.photo_s3_key}`
+      const observedAt = body.observed_at
 
       const insertResult = await fastify.pg.query(
         `INSERT INTO sightings (
@@ -307,7 +348,11 @@ const sightingsRoutes: FastifyPluginAsync = async (fastify) => {
             observed_at
           ) VALUES (
             $1, $2,
-            ST_SetSRID(ST_MakePoint($4, $3), 4326)::geography,
+            CASE
+              WHEN $3::double precision IS NOT NULL AND $4::double precision IS NOT NULL
+                THEN ST_SetSRID(ST_MakePoint($4::double precision, $3::double precision), 4326)::geography
+              ELSE NULL
+            END,
             $5, $6, $7, $8, $9, $10,
             $11, $12, $13, $14, $15,
             $16, $17, $18,
@@ -331,7 +376,7 @@ const sightingsRoutes: FastifyPluginAsync = async (fastify) => {
           isAiConfirmed,
           pointsEarned,
           isFirstForUser,
-          body.observed_at,
+          observedAt,
         ],
       )
 
@@ -340,17 +385,53 @@ const sightingsRoutes: FastifyPluginAsync = async (fastify) => {
         .query(
           `UPDATE users SET
              total_points = total_points + $2,
-             last_sighting_at = NOW(),
+             last_sighting_at = CASE
+               WHEN last_sighting_at IS NULL OR last_sighting_at < $4::timestamptz
+                 THEN $4::timestamptz
+               ELSE last_sighting_at
+             END,
              species_count = species_count + $3,
              streak_days = CASE
-               WHEN last_sighting_at::date = CURRENT_DATE - 1 THEN streak_days + 1
-               WHEN last_sighting_at::date = CURRENT_DATE THEN streak_days
+               WHEN last_sighting_at IS NOT NULL AND last_sighting_at > $4::timestamptz THEN streak_days
+               WHEN last_sighting_at IS NULL THEN 1
+               WHEN (last_sighting_at AT TIME ZONE 'Asia/Seoul')::date
+                    = ($4::timestamptz AT TIME ZONE 'Asia/Seoul')::date THEN streak_days
+               WHEN (last_sighting_at AT TIME ZONE 'Asia/Seoul')::date
+                    = (($4::timestamptz AT TIME ZONE 'Asia/Seoul')::date - 1) THEN streak_days + 1
                ELSE 1
              END
-           WHERE user_id = $1`,
-          [userId, pointsEarned, isFirstForUser ? 1 : 0],
+            WHERE user_id = $1`,
+          [userId, pointsEarned, isFirstForUser ? 1 : 0, observedAt],
         )
         .catch((err: unknown) => fastify.log.error(err, 'users stats 업데이트 실패'))
+
+      if (body.ai_species_id != null) {
+        fastify.pg
+          .query(
+            `INSERT INTO ai_feedback (
+               user_id, sighting_id, photo_s3_key,
+               ai_species_id, ai_confidence, ai_top3,
+               user_selected_species_id, was_corrected, model_version, training_consent
+             ) VALUES (
+               $1, $2, $3,
+               $4, $5, $6::jsonb,
+               $7, $8, $9, $10
+             )`,
+            [
+              userId,
+              insertResult.rows[0].sighting_id,
+              body.photo_s3_key,
+              body.ai_species_id,
+              body.ai_confidence ?? null,
+              body.ai_top3 ? JSON.stringify(body.ai_top3) : null,
+              body.species_id,
+              body.ai_species_id !== body.species_id,
+              body.ai_model_version ?? null,
+              trainingConsent,
+            ],
+          )
+          .catch((err: unknown) => fastify.log.error(err, 'ai_feedback 저장 실패'))
+      }
 
       return reply.code(201).send({
         data: {

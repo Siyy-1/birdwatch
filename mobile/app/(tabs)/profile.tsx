@@ -96,7 +96,7 @@ function SightingRow({ sighting }: { sighting: Sighting }) {
 
 export default function ProfileScreen() {
   const router = useRouter()
-  const { user, signOut, updateGpsConsent } = useAuthStore()
+  const { user, signOut, updateGpsConsent, updateAiTrainingOptIn } = useAuthStore()
   const [recentSightings, setRecentSightings] = useState<Sighting[]>([])
   const [isLoading, setIsLoading] = useState(false)
 
@@ -147,6 +147,14 @@ export default function ProfileScreen() {
       await updateGpsConsent(value)
     } catch {
       Alert.alert('오류', 'GPS 동의 변경에 실패했습니다')
+    }
+  }
+
+  const handleAiTrainingConsent = async (value: boolean) => {
+    try {
+      await updateAiTrainingOptIn(value)
+    } catch {
+      Alert.alert('오류', 'AI 학습 동의 변경에 실패했습니다')
     }
   }
 
@@ -276,6 +284,21 @@ export default function ProfileScreen() {
           onValueChange={handleGpsConsent}
           trackColor={{ false: '#E0E0E0', true: Colors.secondary }}
           thumbColor={user?.gps_consent ? Colors.primary : '#FFFFFF'}
+        />
+      </View>
+
+      <View style={styles.settingRow}>
+        <View style={styles.settingTextBox}>
+          <Text style={styles.settingLabel}>🧠 AI 학습 개선 동의</Text>
+          <Text style={styles.settingSubLabel}>
+            촬영 이미지를 AI 품질 개선과 재학습에 활용합니다. 건별 저장 시에도 다시 변경할 수 있습니다.
+          </Text>
+        </View>
+        <Switch
+          value={user.ai_training_opt_in}
+          onValueChange={handleAiTrainingConsent}
+          trackColor={{ false: '#E0E0E0', true: Colors.secondary }}
+          thumbColor={user.ai_training_opt_in ? Colors.primary : '#FFFFFF'}
         />
       </View>
 
@@ -505,6 +528,16 @@ const styles = StyleSheet.create({
   settingLabel: {
     fontSize: 15,
     color: Colors.text.primary,
+  },
+  settingTextBox: {
+    flex: 1,
+    paddingRight: 12,
+  },
+  settingSubLabel: {
+    marginTop: 4,
+    fontSize: 12,
+    lineHeight: 18,
+    color: Colors.text.secondary,
   },
 
   // Explorer Pass 업그레이드 CTA

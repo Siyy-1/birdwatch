@@ -28,9 +28,11 @@ export interface User {
   oauth_provider: OAuthProvider
   gps_consent: boolean
   gps_consent_at: string | null
-  terms_agreed_at: string
-  privacy_agreed_at: string
+  terms_agreed_at: string | null
+  privacy_agreed_at: string | null
   marketing_agreed_at: string | null
+  ai_training_opt_in: boolean
+  ai_training_opt_in_at: string | null
   total_points: number
   streak_days: number
   last_sighting_at: string | null
@@ -51,8 +53,8 @@ export interface Sighting {
   user_id: string
   species_id: string
   name_ko: string
-  lat: number
-  lng: number
+  lat: number | null
+  lng: number | null
   location_accuracy_m: number | null
   altitude_m: number | null
   photo_cdn_url: string | null
@@ -71,8 +73,8 @@ export interface Sighting {
 
 export interface CreateSightingRequest {
   species_id: string
-  lat: number
-  lng: number
+  lat?: number | null
+  lng?: number | null
   location_accuracy_m?: number
   altitude_m?: number
   photo_s3_key: string
@@ -83,6 +85,7 @@ export interface CreateSightingRequest {
   ai_top3?: AiTop3Item[]
   ai_model_version?: string
   ai_inference_ms?: number
+  ai_training_consent?: boolean
   observed_at: string
 }
 
@@ -118,4 +121,12 @@ export interface AiIdentifyResult {
   top3: Array<{ species: Species; confidence: number }>
   model_version: string
   inference_ms: number
+}
+
+export interface CompleteOnboardingRequest {
+  terms_agreed: true
+  privacy_agreed: true
+  marketing_agreed?: boolean
+  gps_consent?: boolean
+  ai_training_opt_in?: boolean
 }

@@ -149,7 +149,7 @@ export const sightingsApi = {
   get: (sightingId: string) =>
     apiClient.get(`/api/v1/sightings/${sightingId}`),
 
-  create: (body: import('./storage/offlineQueue').QueuedSighting) =>
+  create: (body: import('../types/api').CreateSightingRequest) =>
     apiClient.post('/api/v1/sightings', body),
 
   delete: (sightingId: string) =>
@@ -164,11 +164,14 @@ export const usersApi = {
   me: () =>
     apiClient.get('/api/v1/users/me'),
 
-  update: (body: { nickname?: string; profile_image_key?: string; marketing_agreed?: boolean }) =>
+  update: (body: { nickname?: string; profile_image_key?: string; marketing_agreed?: boolean; ai_training_opt_in?: boolean }) =>
     apiClient.patch('/api/v1/users/me', body),
 
   updateConsent: (gps_consent: boolean) =>
     apiClient.post('/api/v1/users/me/consent', { gps_consent }),
+
+  completeOnboarding: (body: import('../types/api').CompleteOnboardingRequest) =>
+    apiClient.post('/api/v1/users/me/onboarding', body),
 
   withdraw: () =>
     apiClient.delete('/api/v1/users/me'),

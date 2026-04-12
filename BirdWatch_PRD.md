@@ -16,11 +16,11 @@ BirdWatch transforms real-world bird watching into an addictive collection game 
 
 ### Executive Summary
 
-BirdWatch is a GPS-based bird watching game app where users photograph real birds, receive instant AI species identification, and build a personal bird encyclopedia (Pok&eacute;dex-style collection). Every sighting is GPS-tagged and timestamped, creating a living map of avian encounters. Bird rarity is grounded in real-world data: ABA rarity codes combined with GBIF occurrence frequency determine point values, while Korea's legally designated Natural Monument species (천연기념물) serve as legendary-tier collectibles.
+BirdWatch is a GPS-based bird watching game app where users photograph real birds, receive instant AI species identification, build a personal bird encyclopedia (Pok&eacute;dex-style collection), and optionally share their sightings in a lightweight birding social feed. Every sighting is GPS-tagged and timestamped, creating a living map of avian encounters. Bird rarity is grounded in real-world data: ABA rarity codes combined with GBIF occurrence frequency determine point values, while Korea's legally designated Natural Monument species (천연기념물) serve as legendary-tier collectibles.
 
 The Korean market presents a first-mover opportunity. Zero gamified birding apps exist in Korean. Meanwhile, 24 million Korean mobile gamers play actively, K-outdoor culture is surging (2024 camping/hiking boom), and Korea hosts world-class birding sites including UNESCO Getbol tidal flats and Cheorwon crane habitats. Global competitors Merlin (10M users, no gamification), Birda (Apple App of the Day in 150 countries), and Birdex (200K sightings at UK launch) validate demand but none serve Korean species, language, or cultural context.
 
-The business model is freemium: free tier with 10 AI identifications/day and 200 species, Explorer Pass at 6,900 KRW/month unlocks unlimited IDs, full 300+ species catalog, and community features. Organic acquisition via KakaoTalk sharing targets LTV:CAC of 17:1. Launch timing is spring 2027 migration peak to maximize Day-1 species diversity and media coverage.
+The business model is freemium: free tier with 10 AI identifications/day and 200 species, Explorer Pass at 6,900 KRW/month unlocks unlimited IDs, full 300+ species catalog, and expanded social visibility features. Organic acquisition via KakaoTalk sharing and community feed discovery targets LTV:CAC of 17:1. Launch timing is spring 2027 migration peak to maximize Day-1 species diversity and media coverage.
 
 ### Key Benefits
 
@@ -113,7 +113,7 @@ The business model is freemium: free tier with 10 AI identifications/day and 200
 #### Instrumentation Requirements
 
 - PostHog self-hosted (Seoul region) for all analytics — PIPA compliant, no third-party data transfer
-- Events to track: `app_open`, `camera_launched`, `photo_taken`, `id_requested`, `id_accepted`, `id_rejected`, `id_corrected`, `sighting_saved`, `species_unlocked`, `badge_earned`, `map_viewed`, `share_initiated`, `share_completed`, `subscription_started`, `subscription_cancelled`
+- Events to track: `app_open`, `camera_launched`, `photo_taken`, `id_requested`, `id_accepted`, `id_rejected`, `id_corrected`, `sighting_saved`, `species_unlocked`, `badge_earned`, `map_viewed`, `gallery_viewed`, `post_shared`, `heart_toggled`, `profile_viewed`, `share_initiated`, `share_completed`, `subscription_started`, `subscription_cancelled`
 - Attribution: UTM parameters on KakaoTalk share links
 - Performance: API latency p50/p95/p99, AI inference time, map tile load time
 
@@ -121,7 +121,7 @@ The business model is freemium: free tier with 10 AI identifications/day and 200
 
 #### Explicit Non-Goals
 
-- **Social network / feed:** BirdWatch is NOT a social media app. No user profiles, followers, timelines, or comments in MVP. Community features are P1+ only.
+- **Full social network:** BirdWatch includes a lightweight birding feed and profile surfaces, but it is NOT a full social network. No comments, captions, followers, DMs, stories, or creator-style text posting in MVP/P1.
 - **Scientific data collection tool:** BirdWatch is a GAME first. Data quality is important but gamification takes priority over citizen-science rigor. We are not building eBird.
 - **Hardcore ornithologist features:** No audio spectrogram analysis, no field mark annotation, no taxonomy dispute resolution. Target is MZ casual gamers.
 - **Global species coverage at launch:** MVP covers 300 Korean species only. Global expansion is post-MVP.
@@ -619,7 +619,7 @@ Users must be able to view their sightings on an interactive map.
 
 *Acceptance Criteria:*
 - Given a user opens the Map View (home screen / default tab), when the map loads, then:
-  - Map displays using MapLibre GL Native rendering with OpenFreeMap tiles
+  - Map displays using Google Maps native rendering
   - User's current location is shown with a pulsing blue dot
   - All user's sightings are shown as pins colored by rarity tier (green/blue/purple/gold)
   - Map centers on user's current location at city-level zoom by default
@@ -813,14 +813,16 @@ Users can share sighting cards and collection achievements via KakaoTalk.
 Users can share their bird photos to a community gallery and browse, filter, and react to other users' photos.
 
 *Overview:*
-The Gallery tab is the social layer of BirdWatch. Users opt-in to share individual sighting photos publicly. The feed is chronological by default with species/region/rarity filters. Engagement is lightweight: hearts (좋아요) only, no comments in P1. Location is limited to province (도) level to protect privacy.
+The Gallery tab is the primary social discovery surface of BirdWatch: an Instagram-like birding feed built around structured sighting posts, not free-form text content. Users opt-in to share individual sighting photos publicly. The feed is chronological by default with species/region/rarity filters. Engagement is intentionally lightweight in MVP/P1: hearts (좋아요) only. Captions, comments, follows, DMs, and stories are explicitly out of scope. Location is limited to province (도) level to protect privacy.
 
 *Acceptance Criteria — Feed:*
 - Given a user opens the "갤러리" tab, when the feed loads, then a chronological list of community-shared photos is displayed
 - Each feed card shows: species photo (full-width), Korean species name + rarity badge, nickname (닉네임), approximate location (도 단위, e.g. "경상북도" — only if user allowed location), time ago (e.g. "3시간 전"), heart count
+- Feed cards do not support free-form captions or comments in MVP/P1
 - Feed is paginated (20 cards per page, infinite scroll)
 - Sensitive species (천연기념물 / 희귀종) are **excluded from the gallery entirely** (PIPA + poaching risk)
-- Tapping a card opens the species detail page (read-only for other users' posts)
+- Tapping the creator nickname/avatar opens that user's public birding profile
+- Tapping the photo/card opens a read-only post detail surface for that sighting photo; from there the user can navigate to the species detail page
 
 *Acceptance Criteria — Filters:*
 - Filter bar above the feed with three independent filters (combinable):
@@ -857,6 +859,43 @@ The Gallery tab is the social layer of BirdWatch. Users opt-in to share individu
 - Province-level location only; 시/군/구 or finer granularity is never shown
 - Users can report inappropriate photos (report → hidden from reporter immediately, queued for admin review)
 - Blocked users' photos are hidden from the feed
+
+---
+
+**FR-105: Profile Tab / Public Birding Profile** (P1)
+Users can browse a birding-focused public profile and use their My Page as a lightweight social profile anchored in sightings, not text posting.
+
+*Overview:*
+The Profile tab should feel familiar to users of modern photo apps, but BirdWatch remains a birding product first. My Page and public profiles emphasize bird sightings, collection progress, and streak/rarity stats. The main social artifact is the shared sighting photo grid. Engagement remains lightweight: no captions, comments, followers, or DMs in MVP/P1.
+
+*Acceptance Criteria — Profile Header:*
+- Given a user opens their own My Page, when the screen loads, then they see profile image, nickname, total shared posts count, unique species count, total rarity score, and current streak
+- Given a user opens another user's public profile from the gallery, when the screen loads, then they see the same public summary except private-only controls are hidden
+- Profile header does not show follower/following counts in MVP/P1
+
+*Acceptance Criteria — Profile Tabs:*
+- My Page includes three top-level sections:
+  - **게시물 (Posts):** shared birding photo grid
+  - **도감 (Collection):** discovered species progress summary with entry point to encyclopedia
+  - **기록 (Records):** personal sighting timeline/map summary
+- Public profiles expose only the **게시물 (Posts)** section in MVP/P1
+
+*Acceptance Criteria — Post Grid:*
+- Posts section uses a dense 3-column square grid on phone and expands appropriately on tablet
+- Each tile represents a shared sighting photo and preserves existing privacy rules for species/location
+- Tapping a tile opens the read-only post detail surface for that shared sighting
+- Grid is sorted newest-first by default
+
+*Acceptance Criteria — My Page Actions:*
+- Given a user is viewing their own profile, when they inspect the page, then they can access settings, subscription state, AI training consent, and gallery sharing counter
+- Shared post management (unshare/delete) remains available only to the owner
+- My Page remains the entry point for profile editing and privacy preferences
+
+*Acceptance Criteria — Out of Scope:*
+- No captions
+- No comments
+- No follower / following graph
+- No DM or story-style ephemeral content
 
 ---
 
@@ -964,8 +1003,8 @@ The Gallery tab is the social layer of BirdWatch. Users opt-in to share individu
 │                        MOBILE CLIENT                            │
 │  React Native (TypeScript)                                      │
 │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐           │
-│  │ Camera   │ │ MapLibre │ │ Encyclop │ │ Auth     │           │
-│  │ Module   │ │ GL Native│ │ Module   │ │ Module   │           │
+│  │ Camera   │ │ Google   │ │ Encyclop │ │ Auth     │           │
+│  │ Module   │ │ Maps SDK │ │ Module   │ │ Module   │           │
 │  └────┬─────┘ └────┬─────┘ └────┬─────┘ └────┬─────┘           │
 │       │             │            │             │                 │
 │  ┌────┴─────────────┴────────────┴─────────────┴──────────┐     │
@@ -1019,8 +1058,8 @@ The Gallery tab is the social layer of BirdWatch. Users opt-in to share individu
 
 External Services:
   ┌──────────────┐  ┌──────────────┐  ┌──────────────┐
-  │ Kakao OAuth  │  │ OpenFreeMap  │  │ Open-Meteo   │
-  │ (Auth)       │  │ (Map tiles)  │  │ (Weather)    │
+  │ Kakao OAuth  │  │ Google Maps  │  │ Open-Meteo   │
+  │ (Auth)       │  │ (Maps/Geo)   │  │ (Weather)    │
   └──────────────┘  └──────────────┘  └──────────────┘
   ┌──────────────┐  ┌──────────────┐
   │ Apple/Google │  │ GBIF API     │
@@ -1036,8 +1075,8 @@ External Services:
 | AI Model | EfficientNet-Lite B2 INT8 | 8MB model size enables future on-device inference; proven accuracy on fine-grained image classification; NIBR Korean fine-tuning feasible |
 | Backend Runtime | Node.js + Fastify | Highest-performance Node framework; TypeScript end-to-end with mobile; small team single-language advantage |
 | Database | PostgreSQL 15 + PostGIS 3.4 | PostGIS spatial queries for sighting map + species range; industry standard; RDS managed reduces ops burden |
-| Map Rendering | MapLibre GL Native | Open-source, zero licensing cost; native performance on mobile; OpenFreeMap tiles = $0 map infrastructure |
-| Map Tiles | OpenFreeMap | Zero cost (self-hosted OSM tiles); sufficient detail for birding context; no Google/Mapbox billing surprises |
+| Map Rendering | Google Maps SDK | Stable mobile-native rendering, reliable POI/terrain quality in Korea, and lower product risk than self-managed tile infrastructure |
+| Map Provider | Google Maps Platform | Confirmed product direction for launch build; consistent geocoding, mobile SDK support, and operational simplicity |
 | Auth | AWS Cognito + Kakao/Apple/Google OAuth | Managed auth reduces security risk; Kakao federated identity support; PKCE flow built-in |
 | Object Storage | S3 + CloudFront | Presigned URL pattern eliminates credential exposure; CloudFront for fast photo serving in Korea; EXIF strip in Lambda@Edge |
 | Analytics | PostHog (Self-Hosted) | PIPA compliance (Seoul region hosting, no third-party transfer); open-source; feature flags for rollout control |
@@ -1056,10 +1095,10 @@ External Services:
 - Rationale: Native spatial indexing (GiST) for sighting queries; coordinate obscuring functions built-in; distance calculations for "nearby sightings"; future heatmap generation
 - Alternative rejected: MongoDB GeoJSON (less mature spatial indexing, team has PostgreSQL experience)
 
-**AD-003: OpenFreeMap over Google Maps / Mapbox**
-- Decision: MapLibre GL Native + OpenFreeMap for zero map cost
-- Rationale: At 5,000+ WAU with frequent map views, Google Maps/Mapbox would cost $2,000-5,000/month; OpenFreeMap is $0; MapLibre is open-source with excellent mobile performance
-- Risk: OpenFreeMap tile quality/uptime — mitigated by tile caching + fallback tile server
+**AD-003: Google Maps over MapLibre / OpenFreeMap**
+- Decision: Use Google Maps as the shipping map stack for MVP/P1
+- Rationale: Better reliability and Korea map quality, faster implementation on the current team, and lower launch risk than self-managed tile/provider fallback logic
+- Risk: Usage-based map cost must be monitored; mitigate with scoped API keys, quota alarms, and map screen instrumentation
 
 **AD-004: GBIF over eBird for Spawn Data**
 - Decision: Use GBIF (CC BY 4.0) for species occurrence/spawn data, NOT eBird
@@ -1309,7 +1348,7 @@ NIBR Korean Bird Checklist
 | Week | Deliverable | Dependencies |
 |------|-------------|--------------|
 | 9-10 | Species encyclopedia grid view; silhouette/discovered states; species detail page; discovery animation | Phase 1 complete |
-| 10-12 | MapLibre GL integration; OpenFreeMap tiles; sighting pin rendering; pin clustering; location permission handling | Phase 1 sightings |
+| 10-12 | Google Maps integration; sighting pin rendering; pin clustering; location permission handling | Phase 1 sightings |
 | 12-13 | Rarity system implementation; point calculation; user profile with score; free-tier species locking | Species DB, sightings |
 | 13-14 | Badge system (6 milestone badges); streak counter; level/rank system; notification toasts | Points system |
 | 14-16 | Subscription paywall (App Store + Play Store IAP); free-tier limits enforcement; sighting history list + filters; offline queue | All above |
@@ -1317,7 +1356,7 @@ NIBR Korean Bird Checklist
 **Milestone Gate (Week 16):** Full MVP feature set functional. A user can authenticate, photograph birds, browse encyclopedia, view map, earn badges, maintain streaks, and subscribe to Explorer Pass.
 
 **Phase 2 Risks:**
-- MapLibre GL Native integration with React Native may have sharp edges (test early, Week 9)
+- Google Maps SDK quota / API-key restrictions may block map rendering if not validated early
 - App Store IAP review can be slow (submit test build Week 14)
 
 ---
@@ -1354,7 +1393,7 @@ NIBR Korean Bird Checklist
 **Phase 4 (Weeks 23-30): Growth & P1 Features**
 - BirdNET sound identification (FR-100)
 - KakaoTalk sharing (FR-103)
-- Community sighting feed (FR-104, read-only)
+- Community sighting feed + birding profile surfaces (FR-104, FR-105, hearts only)
 - English localization
 - Species expansion to 450
 
@@ -1375,7 +1414,7 @@ NIBR Korean Bird Checklist
 | R2 | **Endangered species location exposure** — Public display of 천연기념물 or EN/CR species coordinates enables poaching/disturbance | Medium | Critical | Implement 3-tier coordinate obscuring (FR-034) at database level; exclude Tier 1/2 species from community feed entirely; server-side enforcement (not client-side) | Emergency species removal from public endpoints; coordinate data purge if breach detected |
 | R3 | **Korean species AI accuracy below 80%** — NIBR fine-tuning insufficient, users reject AI results > 30% of the time | Medium | High | Secure NIBR dataset MOU in Week 1; augment with iNaturalist Korean observations; benchmark gate at Phase 1 milestone (Week 8); iterative model improvement from user corrections (FR-013) | Launch with 200 high-confidence species (instead of 300); clearly label confidence levels; expand species as accuracy improves |
 | R4 | **App Store rejection for location permission** — Apple rejects app citing insufficient justification for foreground location access | Medium | Medium | Prepare detailed location usage justification document; foreground-only GPS (no background tracking in MVP); clear user-facing explanation of GPS purpose in consent flow; review Apple's latest location permission guidelines | Resubmit with enhanced justification; worst case: launch Android-first while iOS review resolves |
-| R5 | **OpenFreeMap reliability** — Tile server downtime or slow tile delivery degrades map experience | Low | Medium | Aggressive tile caching (200MB, 7-day TTL); monitor tile server uptime; pre-cache Seoul metropolitan area tiles in app bundle | Switch to Stadia Maps free tier (up to 200K requests/month) as fallback; or self-host OSM tiles on S3 |
+| R5 | **Google Maps quota / key misconfiguration** — API restriction errors or quota exhaustion can blank the map screen | Medium | High | Separate Android/iOS keys, quota alarms, startup health checks, and staging validation on real devices | Temporary fallback to static map placeholder + key rotation + emergency quota raise |
 | R6 | **Solo developer burnout / scope creep** — 22-week timeline with single developer is aggressive | High | High | Strict P0-only MVP scope; no P1 features until Phase 4; weekly scope review against timeline; pre-built component libraries (React Native Elements, etc.) | Extend timeline to 28 weeks; cut P0 scope to auth + AI ID + encyclopedia only (no map, no gamification in MVP) |
 | R7 | **eBird/Cornell legal challenge** — Cornell Lab claims spawn data derived from eBird violates terms | Low | Medium | Use only GBIF CC BY 4.0 data (explicitly commercially usable); document data provenance chain; no eBird API calls, no eBird data in pipeline | If challenged, switch to GBIF CC0 subset only; remove any contested data within 48 hours |
 
@@ -1480,9 +1519,9 @@ This is the single metric that captures the health of the entire product:
 | OQ-3 | **천연기념물 coordinate obscuring grid size:** Is 252 km^2 sufficient for Korean Natural Monument species, or does the Cultural Heritage Administration require larger grids? | Legal/Conservation | Week 6 | May need to increase obscuring radius, impacting map UX |
 | OQ-4 | **PIPA consent flow design:** Does the separate GPS consent screen need to be a full page, or can it be a modal? Does it need to be re-displayed periodically? | Legal | Week 4 | Consent flow may need redesign mid-development |
 | OQ-5 | **AI model accuracy on Korean raptors:** Raptors (매류) are notoriously difficult to distinguish in photos. Can we achieve 80% top-1 on raptor species, or should they be excluded from MVP 300? | AI/ML | Week 6 (Phase 1 benchmark) | May need to reduce MVP species count or add manual-only raptor ID |
-| OQ-6 | **OpenFreeMap Korea tile quality:** Are OpenFreeMap tiles sufficiently detailed for Korean rural/natural areas where birding occurs? | Engineering | Week 2 (spike) | May need to supplement with Korean-specific tile source or Vworld API |
+| OQ-6 | **Google Maps cost envelope:** At target WAU, what monthly map cost range should be budgeted under actual feed/profile engagement? | Engineering | Week 2 (spike) | May need stronger quota controls or lower-frequency map loading |
 | OQ-7 | **App Store IAP for Korean won:** Does Apple allow 6,900 KRW pricing tier, or must we use Apple's nearest tier (possibly 6,600 or 7,500)? | Engineering | Week 14 | Pricing may need adjustment to match App Store tier grid |
-| OQ-8 | **React Native + MapLibre GL Native stability:** Has anyone shipped this combination in production? Known issues? | Engineering | Week 1 (spike) | May need to fall back to react-native-maps with different tile source |
+| OQ-8 | **Birding SNS moderation envelope:** Are report/unshare-only controls sufficient for MVP/P1 without comments/captions, or is block/report tooling expansion needed before wider launch? | Product / Ops | Week 6 | Could delay public feed rollout if abuse handling is too thin |
 
 ---
 
@@ -1528,7 +1567,7 @@ This is the single metric that captures the health of the entire product:
 | Kakao Login | Yes | No | No | No |
 | Gamification | Full (badges, points, streaks, levels) | None | Light (challenges) | Full (Pok&eacute;mon-style) |
 | Collection/Pok&eacute;dex | Yes (300 species) | Life list only | Yes (basic) | Yes |
-| Map view | Yes (free, MapLibre) | No | Yes | Yes |
+| Map view | Yes (Google Maps) | No | Yes | Yes |
 | Sound ID | P1 (BirdNET) | Yes (proprietary) | No | No |
 | PIPA compliant | Yes | Unknown | No | No |
 | Korean market focus | Primary | Global | Global | UK-first |

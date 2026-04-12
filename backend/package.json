@@ -7,7 +7,11 @@
     "build": "tsc --project tsconfig.json",
     "start": "node dist/server.js",
     "lint": "eslint src --ext .ts",
-    "test": "vitest run"
+    "test": "vitest run",
+    "db:migrate": "tsx src/scripts/migrate.ts up",
+    "db:migrate:status": "tsx src/scripts/migrate.ts status",
+    "db:migrate:baseline": "tsx src/scripts/migrate.ts baseline",
+    "db:migrate:doctor": "tsx src/scripts/migrate.ts doctor"
   },
   "dependencies": {
     "@aws-sdk/client-cognito-identity-provider": "^3.600.0",

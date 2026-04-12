@@ -57,7 +57,7 @@ export async function signInWithKakao(): Promise<AuthResult> {
     throw new Error('Kakao 로그인 취소됨')
   }
 
-  return exchangeCodeForTokens(result.params.code, verifier)
+  return exchangeCodeForTokens(result.params.code, verifier, 'kakao')
 }
 
 // ---------------------------------------------------------------------------
@@ -122,7 +122,7 @@ export async function signInWithGoogle(): Promise<AuthResult> {
     throw new Error('Google 로그인 취소됨')
   }
 
-  return exchangeCodeForTokens(result.params.code, verifier)
+  return exchangeCodeForTokens(result.params.code, verifier, 'google')
 }
 
 // ---------------------------------------------------------------------------
@@ -150,7 +150,11 @@ export async function restoreSession(): Promise<AuthResult | null> {
 // 내부 유틸
 // ---------------------------------------------------------------------------
 
-async function exchangeCodeForTokens(code: string, verifier: string): Promise<AuthResult> {
+async function exchangeCodeForTokens(
+  code: string,
+  verifier: string,
+  oauthProvider: 'kakao' | 'google',
+): Promise<AuthResult> {
   const response = await apiClient.post<{
     access_token: string
     refresh_token: string
@@ -160,6 +164,7 @@ async function exchangeCodeForTokens(code: string, verifier: string): Promise<Au
     code_verifier: verifier,
     redirect_uri:  REDIRECT_URI,
     grant_type:    'authorization_code',
+    oauth_provider: oauthProvider,
   })
 
   const { access_token, refresh_token, user_id } = response.data
