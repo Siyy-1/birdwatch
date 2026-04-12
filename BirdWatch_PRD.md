@@ -1,7 +1,7 @@
 # Product Requirements Document: BirdWatch (버드워치)
 
-**Version:** 1.1
-**Last Updated:** 2026-04-08
+**Version:** 1.2
+**Last Updated:** 2026-04-12
 **Document Owner:** Product Team
 **Status:** Draft
 **AI-Optimization Score:** See Appendix D
@@ -16,7 +16,7 @@ BirdWatch transforms real-world bird watching into an addictive collection game 
 
 ### Executive Summary
 
-BirdWatch is a GPS-based bird watching game app where users photograph real birds, receive instant AI species identification, build a personal bird encyclopedia (Pok&eacute;dex-style collection), and optionally share their sightings in a lightweight birding social feed. Every sighting is GPS-tagged and timestamped, creating a living map of avian encounters. Bird rarity is grounded in real-world data: ABA rarity codes combined with GBIF occurrence frequency determine point values, while Korea's legally designated Natural Monument species (천연기념물) serve as legendary-tier collectibles.
+BirdWatch is a GPS-aware bird watching game app where users photograph real birds, receive instant AI species identification, build a personal bird encyclopedia (Pok&eacute;dex-style collection), and optionally share their sightings in a lightweight birding social feed. Sightings are timestamped and can be GPS-tagged when the user consents and location is available, while the product still supports saving sightings without coordinates when GPS is unavailable or declined. Bird rarity is grounded in real-world data: ABA rarity codes combined with GBIF occurrence frequency determine point values, while Korea's legally designated Natural Monument species (천연기념물) serve as legendary-tier collectibles.
 
 The Korean market presents a first-mover opportunity. Zero gamified birding apps exist in Korean. Meanwhile, 24 million Korean mobile gamers play actively, K-outdoor culture is surging (2024 camping/hiking boom), and Korea hosts world-class birding sites including UNESCO Getbol tidal flats and Cheorwon crane habitats. Global competitors Merlin (10M users, no gamification), Birda (Apple App of the Day in 150 countries), and Birdex (200K sightings at UK launch) validate demand but none serve Korean species, language, or cultural context.
 
@@ -28,6 +28,21 @@ The business model is freemium: free tier with 10 AI identifications/day and 200
 - **For hobbyist birders (박선호 persona):** First Korean-language bird identification tool with GPS-tagged sighting history, rarity scoring, and exportable field data
 - **For competitive collectors (이준호 persona):** Leaderboard competition, legendary-tier Natural Monument species requiring real travel, and seasonal migration events as limited-time content
 - **For the Korean market:** First gamified birding app with native Kakao Login, Korean species taxonomy, PIPA-compliant data handling, and Seoul-region hosting
+
+### Implementation Alignment Update (2026-04-12)
+
+The following decisions are locked for the current build and should be treated as the latest implementation-aligned product direction until the next full PRD rewrite:
+
+- **Map stack:** Google Maps is the confirmed map stack for launch builds.
+- **Social scope:** MVP/P1 social engagement is **hearts-only**. Comments, captions, follows, DMs, and stories remain out of scope.
+- **Gallery direction:** The Gallery tab is a structured **birding feed**, not a generic image list.
+- **Profile direction:** My Page is **profile-first** with a profile header, shared post grid, and clear entry points to collection/records.
+- **GPS behavior:** Users can still photograph, identify, and save sightings when GPS consent is denied or location capture fails; those sightings save without coordinates.
+- **Consent timing:** Terms/privacy consent is recorded on onboarding completion, not automatically at account creation.
+- **Photo privacy:** EXIF stripping is two-stage: mobile pre-upload sanitization plus a server-side sanitization pass before AI identify/save.
+- **Offline queue UX:** Offline identifications are queued and preserved with the original capture timestamp. Connectivity recovery does not auto-flush immediately; the user confirms once before resume.
+- **AI review flow:** Users review top candidates, can search/select a different species, and corrections feed the AI feedback loop.
+- **AI feedback defaults:** Global AI training consent defaults to OFF, with per-save override support.
 
 ---
 
@@ -285,7 +300,7 @@ First-time users must complete a brief onboarding that establishes core mechanic
   1. "새를 찾아 사진을 찍으세요" (Find birds and take photos) — camera mechanic
   2. "AI가 종을 알려드려요" (AI identifies the species) — identification mechanic
   3. "나만의 도감을 완성하세요" (Complete your encyclopedia) — collection goal
-- Given onboarding completion, when user taps "시작하기", then they land on the Map View (home screen)
+- Given onboarding completion, when user taps "시작하기", then required consent timestamps are stored and they land on the Map View (home screen)
 - Each onboarding screen must be swipeable and skippable via "건너뛰기" button
 - Total onboarding flow must complete in < 30 seconds (no forced tutorials)
 
@@ -301,7 +316,7 @@ Users must explicitly consent to GPS data collection per Korean Personal Informa
   - Data retention period ("탈퇴 시까지 보관, 탈퇴 후 30일 이내 파기")
   - Third-party sharing scope ("제3자 제공 없음, 민감종 좌표 자동 난독화")
   - User rights ("동의 철회, 열람, 정정, 삭제 요청 가능")
-- Given the user declines GPS consent, when they return to the app, then the app functions in limited mode (no map, no GPS tagging, AI ID still works from photos)
+- Given the user declines GPS consent, when they return to the app, then the app still supports photo capture, AI identification, and sighting save without coordinates while suppressing current-location features
 - Consent record must be stored with timestamp and version hash in the user profile
 
 ---
@@ -328,7 +343,7 @@ Captured or imported photos must be sent to the AI identification service and re
 *Acceptance Criteria:*
 - Given a captured photo, when the user taps "이 새는 뭘까?" (What bird is this?), then the photo is uploaded to the identification API
 - Given a successful upload, when AI processing completes, then results are returned in < 5 seconds (p95) including network round-trip
-- Given network unavailability, when the user attempts identification, then the photo is queued locally with a message "네트워크 연결 시 자동으로 분석됩니다" (Will be analyzed when connected)
+- Given network unavailability, when the user attempts identification, then the photo is queued locally with a message that analysis will resume after connectivity is restored and the user confirms recovery
 - Upload must use presigned S3 URLs (no raw credentials on device)
 - Photo EXIF data must be stripped before upload (privacy: removes device serial, precise location metadata from the image file itself — GPS is captured separately via the app)
 
@@ -351,10 +366,11 @@ Identification results must present the top species match with confidence and al
 ---
 
 **FR-013: AI Identification Acceptance / Rejection** (P0)
-Users must be able to confirm or reject AI identification results.
+Users must be able to review, confirm, or correct AI identification results before saving.
 
 *Acceptance Criteria:*
-- Given the user taps "맞아요!" (accept), when confirmed, then the sighting is saved with species ID, photo, GPS, timestamp, and confidence score
+- Given AI results are received, when presented, then the user sees a review surface with top candidates and a clear final-save action
+- Given the user taps "맞아요!" (accept), when confirmed, then the sighting is saved with species ID, photo, optional GPS, timestamp, and confidence score
 - Given the user taps "다른 종이에요" (reject), when tapped, then a species search modal opens where user can manually select the correct species
 - Given the user manually corrects species, when saved, then both the AI suggestion and user correction are logged (for model retraining data)
 - Given the user taps "다시 찍기" (retake), when tapped, then camera reopens and the failed attempt is logged as an event (not saved as sighting)
@@ -407,9 +423,10 @@ Free-tier users are limited to 10 AI identifications per day.
 Photos taken without network connectivity must be queued for identification when connectivity resumes.
 
 *Acceptance Criteria:*
-- Given no network connectivity, when user takes a photo and requests ID, then photo is saved locally with GPS and timestamp
+- Given no network connectivity, when user takes a photo and requests ID, then photo is saved locally with optional GPS and original capture timestamp
 - Queue displays in a "대기 중" (Pending) section with photo thumbnails and "분석 대기 중" status
-- Given network connectivity resumes, when the app detects connectivity, then queued photos are uploaded automatically in FIFO order
+- Given network connectivity resumes, when the app detects connectivity, then the user is prompted once to resume queued processing
+- Given the user confirms recovery, when resume starts, then queued photos are uploaded in FIFO order using the original capture timestamp
 - Maximum queue depth: 50 photos (beyond 50, oldest queued photo is warned for deletion)
 - Queue persists across app restarts
 
@@ -443,14 +460,14 @@ The AI model must be updateable without requiring an app store update.
 
 ### 5.3 GPS Sighting Log
 
-**FR-030: Automatic GPS Tagging** (P0)
-Every confirmed sighting must be automatically tagged with GPS coordinates.
+**FR-030: GPS Tagging with Location-Optional Save** (P0)
+Confirmed sightings must store GPS coordinates when consented and available, while still allowing save without coordinates.
 
 *Acceptance Criteria:*
-- Given a sighting is confirmed (user taps "맞아요!"), when saved, then GPS coordinates (latitude, longitude) are attached with accuracy radius
+- Given a sighting is confirmed (user taps "맞아요!"), when GPS is available and consented, then coordinates (latitude, longitude) are attached with accuracy radius
 - GPS accuracy must be <= 20 meters. If accuracy > 20m, display a warning icon on the sighting with "위치 정확도가 낮습니다"
 - Coordinate format: WGS84 decimal degrees, stored to 6 decimal places (sub-meter precision)
-- Given GPS is unavailable (denied or hardware failure), when a sighting is confirmed, then it is saved without coordinates with status "위치 정보 없음" and user is prompted to add location manually via map pin
+- Given GPS is unavailable (denied or hardware failure), when a sighting is confirmed, then it is saved without coordinates with status "위치 정보 없음"
 
 ---
 
@@ -1078,7 +1095,7 @@ External Services:
 | Map Rendering | Google Maps SDK | Stable mobile-native rendering, reliable POI/terrain quality in Korea, and lower product risk than self-managed tile infrastructure |
 | Map Provider | Google Maps Platform | Confirmed product direction for launch build; consistent geocoding, mobile SDK support, and operational simplicity |
 | Auth | AWS Cognito + Kakao/Apple/Google OAuth | Managed auth reduces security risk; Kakao federated identity support; PKCE flow built-in |
-| Object Storage | S3 + CloudFront | Presigned URL pattern eliminates credential exposure; CloudFront for fast photo serving in Korea; EXIF strip in Lambda@Edge |
+| Object Storage | S3 + CloudFront | Presigned URL pattern eliminates credential exposure; CloudFront for fast photo serving in Korea; client-side EXIF strip before upload plus server-side sanitize before identify/save |
 | Analytics | PostHog (Self-Hosted) | PIPA compliance (Seoul region hosting, no third-party transfer); open-source; feature flags for rollout control |
 | Spawn Data | GBIF CC BY 4.0 | Commercially usable (unlike eBird); global coverage; sufficient Korean bird occurrence data for spawn zone generation |
 | Taxonomy | IOC World Bird List | Asian ornithological standard (not Clements/American); aligns with NIBR Korean checklist |
@@ -1323,11 +1340,11 @@ NIBR Korean Bird Checklist
 |------|-------------|--------------|
 | 1-2 | RN project setup, CI/CD (EAS Build), linting, testing scaffold; AWS infrastructure (Terraform): RDS, S3, ECS, Cognito | None |
 | 2-3 | Database schema migration; Fastify API scaffold with auth middleware; Cognito + Kakao/Apple/Google OAuth integration | AWS infra |
-| 3-4 | Species DB seeded (300 species from NIBR/IOC); S3 photo upload with presigned URLs + EXIF strip Lambda | DB schema |
+| 3-4 | Species DB seeded (300 species from NIBR/IOC); S3 photo upload with presigned URLs + mobile EXIF strip + server-side sanitize path | DB schema |
 | 4-6 | AI model training pipeline: EfficientNet-Lite B2 fine-tuning on NIBR Korean dataset; TensorFlow Serving on ECS; inference API endpoint | S3, DB |
 | 6-8 | Mobile camera interface; photo capture + upload + AI ID request + result display; acceptance/rejection flow; PIPA consent flow | Auth, AI API |
 
-**Milestone Gate (Week 8):** A user can sign in via Kakao, take a photo of a bird, receive AI identification result, and accept/reject it. Photo and sighting are saved to database with GPS tag.
+**Milestone Gate (Week 8):** A user can sign in via Kakao, take a photo of a bird, receive AI identification result, review/correct it, and save the sighting. Photo privacy safeguards are active and location save works with or without GPS.
 
 **Phase 1 Risks:**
 - NIBR dataset access may require formal MOU (start negotiation Week 1)
@@ -1390,14 +1407,16 @@ NIBR Korean Bird Checklist
 
 ### Post-Launch Phases (Indicative)
 
-**Phase 4 (Weeks 23-30): Growth & P1 Features**
-- BirdNET sound identification (FR-100)
-- KakaoTalk sharing (FR-103)
-- Community sighting feed + birding profile surfaces (FR-104, FR-105, hearts only)
-- English localization
-- Species expansion to 450
+**Phase 4 (Weeks 23-30): P1 Product Surfaces**
+- Community birding feed + public post detail (FR-104, hearts only)
+- Profile-first My Page + public birding profile (FR-105)
+- Offline queue recovery UX hardening
+- AI feedback export / review / retraining operations
+- Map clustering + rarity pin polish + sighting detail linkage
 
 **Phase 5 (Weeks 31-40): Engagement & Retention**
+- BirdNET sound identification (FR-100)
+- KakaoTalk sharing (FR-103)
 - Seasonal migration events (FR-101)
 - Leaderboard (FR-102)
 - Weekly challenges (FR-074)
