@@ -18,10 +18,11 @@
 ## 다음 작업
 
 1. `P1` 시작: 갤러리 탭을 `birding feed`로 재설계
-2. 마이페이지를 `profile-first` 구조로 재설계
-3. 오프라인 큐 복구 UX와 retry 정책 고도화
-4. `ai_feedback` export / 검수 / 재학습 연결 정리
-5. 지도 클러스터링 / 희귀도 핀 / sighting detail 연결
+2. 병렬 핵심 트랙: AI 모델 `300종 재학습` 계획 확정 및 데이터셋 갭 분석
+3. 마이페이지를 `profile-first` 구조로 재설계
+4. 오프라인 큐 복구 UX와 retry 정책 고도화
+5. `ai_feedback` export / 검수 / 재학습 연결 정리
+6. 지도 클러스터링 / 희귀도 핀 / sighting detail 연결
 
 ## 참고 규칙 / 문서
 
@@ -42,3 +43,4 @@
 - 제품 기준: [BirdWatch_PRD.md](/C:/workspace/Project_2/BirdWatch_PRD.md)
 - 전체 실행 계획: [BIRDWATCH_PLAN.md](/C:/workspace/Project_2/BIRDWATCH_PLAN.md)
 - DB 운영 체크리스트: [PROD_MIGRATION_CHECKLIST.md](/C:/workspace/Project_2/db/PROD_MIGRATION_CHECKLIST.md)
+- AI 재학습 gap report: [AI_RETRAINING_GAP_REPORT.md](/C:/workspace/Project_2/ai/AI_RETRAINING_GAP_REPORT.md)

@@ -43,6 +43,7 @@ The following decisions are locked for the current build and should be treated a
 - **Offline queue UX:** Offline identifications are queued and preserved with the original capture timestamp. Connectivity recovery does not auto-flush immediately; the user confirms once before resume.
 - **AI review flow:** Users review top candidates, can search/select a different species, and corrections feed the AI feedback loop.
 - **AI feedback defaults:** Global AI training consent defaults to OFF, with per-save override support.
+- **AI launch gate:** The currently deployed model should be treated as an interim build until full 300-species coverage and the PRD accuracy thresholds are met through retraining.
 
 ---
 

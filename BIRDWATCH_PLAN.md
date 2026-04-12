@@ -35,6 +35,22 @@
 - `[x]` tf-serving cold-start timeout 완화 완료
 - `[ ]` P1 제품 표면 작업 시작 전
 
+## AI 모델 현재 상태
+
+- 현재 배포 모델은 `ai/models/birdwatch_v1.0.0.*`
+- 현재 `label_map.json` 기준 클래스 수는 `141`
+- 현재 `300종` 대비 누락 종 수는 `159`
+- 현재 `training_history.json` 평가 성능:
+  - `top-1 accuracy = 0.625`
+  - `top-5 accuracy = 0.899`
+- 상세 gap report: [AI_RETRAINING_GAP_REPORT.md](/C:/workspace/Project_2/ai/AI_RETRAINING_GAP_REPORT.md)
+- PRD 목표와 차이:
+  - 목표 종 수: `300`
+  - 목표 정확도: `top-1 >= 0.80`, `top-3 >= 0.92`
+- 결론:
+  - 현재 모델은 `중간 단계 모델`로 봐야 한다.
+  - `300종 커버리지`와 `정확도 목표`를 만족하는 재학습 트랙이 필요하다.
+
 ## P0 체크리스트
 
 - `[x]` 카메라 실기기 E2E 확인
@@ -84,6 +100,37 @@
 - `[ ]` 희귀도별 핀 스타일
 - `[ ]` sighting detail 연결
 - `[ ]` current-location / consent / Seoul fallback UX 재점검
+
+## 병렬 핵심 트랙: AI 모델 재학습
+
+- `[ ]` 현재 학습 커버리지 기준 확정
+  - `species_map_full.json` 소스 확정
+  - 현재 `141` 클래스와 누락 종 목록 추출
+- `[ ]` 데이터셋 갭 분석
+  - 종별 이미지 수 분포 확인
+  - 희귀종/계절종/오분류 상위 종 확인
+  - train/val/test split 품질 점검
+- `[ ]` 300종 학습 입력 정리
+  - `300`종 species map 완성
+  - 클래스별 최소 학습 장수 기준 재설정
+  - 부족 종은 iNaturalist/GBIF/수동 큐레이션으로 보강
+- `[ ]` 재학습 파이프라인 1차 실행
+  - preprocessing
+  - TFRecord 생성
+  - `v1.1.0` 이상으로 재학습
+- `[ ]` 평가 기준 문서화
+  - 전체 `top-1/top-3`
+  - rarity tier별 정확도
+  - 혼동쌍(confusion pair) 리포트
+  - reject/correction 로그와 대조
+- `[ ]` 배포 게이트 정의
+  - `300`종 전체 출시 가능 기준
+  - 기준 미달 시 `고신뢰 subset` 출시 기준
+  - rollback / fallback 기준
+- `[ ]` 운영 피드백 루프 연결
+  - `ai_feedback` export
+  - 교정 데이터 클리닝
+  - 다음 학습 배치 입력 포맷 확정
 
 ## P1.5 런치 준비
 
