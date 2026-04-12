@@ -7,8 +7,8 @@ FastAPI 기반 경량 HTTP 서버 (포트 8001)
   GET  /health   — 서버 상태 확인
 
 모델 스펙:
-  - EfficientNet-Lite B2 INT8 (SELECT_TF_OPS)
-  - 입력: 260×260 RGB float32 [0, 1]
+  - EfficientNet-Lite B2 TFLite (SELECT_TF_OPS)
+  - 입력: 260×260 RGB [0, 1] 또는 양자화 텐서
   - 출력: N개 클래스 softmax 확률 벡터
 """
 
@@ -18,6 +18,7 @@ import base64
 import json
 import os
 import time
+from copy import deepcopy
 from pathlib import Path
 from typing import Optional
 
@@ -31,6 +32,7 @@ import io
 
 MODEL_PATH   = Path(os.environ.get("MODEL_PATH",    "/models/birdwatch_v1.0.0.tflite"))
 LABEL_PATH   = Path(os.environ.get("LABEL_MAP_PATH", "/models/label_map.json"))
+FALLBACK_MODEL_PATH = Path(os.environ.get("FALLBACK_MODEL_PATH", "/models/birdwatch_v1.0.0.h5"))
 MODEL_VERSION = os.environ.get("MODEL_VERSION", "v1.0.0")
 TOP_K         = int(os.environ.get("TOP_K", "3"))
 INPUT_SIZE    = 260  # EfficientNet-Lite B2 native input size
@@ -88,6 +90,8 @@ input_details  = interpreter.get_input_details()
 output_details = interpreter.get_output_details()
 index_to_species: dict[int, str] = _load_label_map(LABEL_PATH)
 num_classes = len(index_to_species)
+active_inference_backend = "tflite"
+keras_fallback_model = None
 print(
     f"[tf_serving_wrapper] 로드 완료 — 클래스 수: {num_classes}, "
     f"입력 shape: {input_details[0]['shape']}, 버전: {MODEL_VERSION}"
@@ -118,6 +122,105 @@ def preprocess_image(image_bytes: bytes) -> np.ndarray:
     return np.expand_dims(arr, axis=0)               # (1, H, W, 3)
 
 
+def adapt_input_tensor(tensor: np.ndarray, input_detail: dict) -> np.ndarray:
+    """모델 입력 dtype/quantization 스펙에 맞게 텐서를 변환한다."""
+    input_dtype = np.dtype(input_detail["dtype"])
+
+    if np.issubdtype(input_dtype, np.floating):
+        return tensor.astype(input_dtype, copy=False)
+
+    if np.issubdtype(input_dtype, np.integer):
+        scale, zero_point = input_detail["quantization"]
+        if scale != 0:
+            return (tensor / scale + zero_point).astype(input_dtype)
+        return tensor.astype(input_dtype)
+
+    raise ValueError(f"지원하지 않는 입력 dtype: {input_dtype}")
+
+
+def invoke_with_dtype_fallback(input_detail: dict, tensor: np.ndarray) -> None:
+    """TFLite/Flex delegate dtype 불일치 시 부동소수 텐서를 1회 재시도한다."""
+    try:
+        interpreter.set_tensor(input_detail["index"], tensor)
+        interpreter.invoke()
+        return
+    except RuntimeError as exc:
+        message = str(exc)
+        input_dtype = np.dtype(input_detail["dtype"])
+        if not np.issubdtype(input_dtype, np.floating):
+            raise
+
+        fallback_dtype: type[np.generic] | None = None
+        if "Expected tensor of type half but got type float" in message:
+            fallback_dtype = np.float16
+        elif "Expected tensor of type float but got type half" in message:
+            fallback_dtype = np.float32
+
+        if fallback_dtype is None or np.dtype(fallback_dtype) == tensor.dtype:
+            raise
+
+        interpreter.set_tensor(input_detail["index"], tensor.astype(fallback_dtype))
+        interpreter.invoke()
+
+
+def normalize_dtype_config(node):
+    """mixed_float16로 저장된 모델 config를 CPU-safe float32 정책으로 치환한다."""
+    if isinstance(node, dict):
+        normalized = {}
+        for key, value in node.items():
+            if key == "dtype":
+                if isinstance(value, dict) and value.get("class_name") == "Policy":
+                    cfg = dict(value.get("config", {}))
+                    cfg["name"] = "float32"
+                    normalized[key] = {"class_name": "Policy", "config": cfg}
+                    continue
+                if value in ("float16", "mixed_float16"):
+                    normalized[key] = "float32"
+                    continue
+            normalized[key] = normalize_dtype_config(value)
+        return normalized
+
+    if isinstance(node, list):
+        return [normalize_dtype_config(item) for item in node]
+
+    return node
+
+
+def load_keras_fallback_model():
+    """CPU에서 mixed_precision 문제를 피하기 위해 float32 정책으로 fallback 모델을 재구성한다."""
+    global keras_fallback_model
+
+    if keras_fallback_model is not None:
+        return keras_fallback_model
+
+    if not FALLBACK_MODEL_PATH.exists():
+        raise FileNotFoundError(f"fallback model not found: {FALLBACK_MODEL_PATH}")
+
+    import tensorflow as tf
+
+    print(f"[tf_serving_wrapper] Keras fallback 로드 중: {FALLBACK_MODEL_PATH}")
+    source_model = tf.keras.models.load_model(str(FALLBACK_MODEL_PATH), compile=False)
+    config = normalize_dtype_config(deepcopy(source_model.get_config()))
+    fallback_model = tf.keras.Model.from_config(config)
+    fallback_model.set_weights(
+        [
+            np.array(weight, dtype=np.float32) if np.issubdtype(weight.dtype, np.floating) else weight
+            for weight in source_model.get_weights()
+        ]
+    )
+    keras_fallback_model = fallback_model
+    print("[tf_serving_wrapper] Keras fallback 로드 완료")
+    return keras_fallback_model
+
+
+def run_keras_fallback_inference(tensor: np.ndarray) -> np.ndarray:
+    fallback_model = load_keras_fallback_model()
+    raw_output = fallback_model(tensor.astype(np.float32, copy=False), training=False).numpy()[0]
+    if np.isnan(raw_output).any():
+        raise RuntimeError("Keras fallback produced NaN outputs")
+    return raw_output.astype(np.float32, copy=False)
+
+
 # ── 추론 ──────────────────────────────────────────────────────────────────────
 
 def run_inference(image_bytes: bytes, top_k: int = TOP_K) -> dict:
@@ -131,36 +234,36 @@ def run_inference(image_bytes: bytes, top_k: int = TOP_K) -> dict:
         "inference_ms": 312
     }
     """
-    tensor = preprocess_image(image_bytes)
+    global active_inference_backend
 
-    # INT8 모델일 경우 quantization 파라미터 적용
     input_detail = input_details[0]
-    if input_detail["dtype"] == np.uint8:
-        scale, zero_point = input_detail["quantization"]
-        if scale != 0:
-            tensor = (tensor / scale + zero_point).astype(np.uint8)
-        else:
-            tensor = tensor.astype(np.uint8)
-    elif input_detail["dtype"] == np.int8:
-        scale, zero_point = input_detail["quantization"]
-        if scale != 0:
-            tensor = (tensor / scale + zero_point).astype(np.int8)
-        else:
-            tensor = tensor.astype(np.int8)
+    base_tensor = preprocess_image(image_bytes)
+    tensor = adapt_input_tensor(base_tensor, input_detail)
 
     t0 = time.monotonic()
-    interpreter.set_tensor(input_detail["index"], tensor)
-    interpreter.invoke()
+    if active_inference_backend == "keras":
+        raw_output = run_keras_fallback_inference(base_tensor)
+    else:
+        try:
+            invoke_with_dtype_fallback(input_detail, tensor)
+            raw_output = interpreter.get_tensor(output_details[0]["index"])[0]  # shape: (num_classes,)
+
+            # INT8 출력 역양자화 → float 확률
+            out_detail = output_details[0]
+            if out_detail["dtype"] in (np.uint8, np.int8):
+                scale, zero_point = out_detail["quantization"]
+                if scale != 0:
+                    raw_output = (raw_output.astype(np.float32) - zero_point) * scale
+            elif np.issubdtype(np.dtype(out_detail["dtype"]), np.floating):
+                raw_output = raw_output.astype(np.float32, copy=False)
+        except Exception as exc:
+            if not FALLBACK_MODEL_PATH.exists():
+                raise
+            print(f"[tf_serving_wrapper] TFLite 추론 실패, Keras fallback으로 전환: {exc}")
+            active_inference_backend = "keras"
+            raw_output = run_keras_fallback_inference(base_tensor)
+
     inference_ms = int((time.monotonic() - t0) * 1000)
-
-    raw_output = interpreter.get_tensor(output_details[0]["index"])[0]  # shape: (num_classes,)
-
-    # INT8 출력 역양자화 → float 확률
-    out_detail = output_details[0]
-    if out_detail["dtype"] in (np.uint8, np.int8):
-        scale, zero_point = out_detail["quantization"]
-        if scale != 0:
-            raw_output = (raw_output.astype(np.float32) - zero_point) * scale
 
     # softmax (이미 softmax가 적용된 경우 재적용해도 순위는 동일)
     exp_out = np.exp(raw_output - np.max(raw_output))
@@ -182,6 +285,7 @@ def run_inference(image_bytes: bytes, top_k: int = TOP_K) -> dict:
         "predictions": predictions,
         "model_version": MODEL_VERSION,
         "inference_ms": inference_ms,
+        "inference_backend": active_inference_backend,
     }
 
 
@@ -201,8 +305,10 @@ async def health():
         "status": "ok",
         "model_version": MODEL_VERSION,
         "model_path": str(MODEL_PATH),
+        "fallback_model_path": str(FALLBACK_MODEL_PATH),
         "num_classes": num_classes,
         "input_size": INPUT_SIZE,
+        "inference_backend": active_inference_backend,
     }
 
 
