@@ -18,6 +18,7 @@
   - 현재 모델 `141`종 / `top-1 0.625`
   - `159`종 누락 확인
   - `full 300종 rebuild` manifest / runbook 준비 완료
+  - 수집 배치 계획 및 GBIF 보강 계획 준비 완료
 
 ## 다음 작업
 
@@ -51,3 +52,5 @@
 - AI 재학습 gap report: [AI_RETRAINING_GAP_REPORT.md](/C:/workspace/Project_2/ai/AI_RETRAINING_GAP_REPORT.md)
 - AI full rebuild summary: [FULL_RETRAINING_SUMMARY.md](/C:/workspace/Project_2/ai/FULL_RETRAINING_SUMMARY.md)
 - AI full rebuild runbook: [FULL_RETRAINING_RUNBOOK.md](/C:/workspace/Project_2/ai/FULL_RETRAINING_RUNBOOK.md)
+- AI collection batches: [COLLECTION_BATCH_PLAN.md](/C:/workspace/Project_2/ai/COLLECTION_BATCH_PLAN.md)
+- AI GBIF plan: [GBIF_COLLECTOR_PLAN.md](/C:/workspace/Project_2/ai/GBIF_COLLECTOR_PLAN.md)

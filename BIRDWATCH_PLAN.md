@@ -46,6 +46,8 @@
 - 상세 gap report: [AI_RETRAINING_GAP_REPORT.md](/C:/workspace/Project_2/ai/AI_RETRAINING_GAP_REPORT.md)
 - full rebuild 요약: [FULL_RETRAINING_SUMMARY.md](/C:/workspace/Project_2/ai/FULL_RETRAINING_SUMMARY.md)
 - 실행 runbook: [FULL_RETRAINING_RUNBOOK.md](/C:/workspace/Project_2/ai/FULL_RETRAINING_RUNBOOK.md)
+- 수집 배치 계획: [COLLECTION_BATCH_PLAN.md](/C:/workspace/Project_2/ai/COLLECTION_BATCH_PLAN.md)
+- GBIF 보강 계획: [GBIF_COLLECTOR_PLAN.md](/C:/workspace/Project_2/ai/GBIF_COLLECTOR_PLAN.md)
 - PRD 목표와 차이:
   - 목표 종 수: `300`
   - 목표 정확도: `top-1 >= 0.80`, `top-3 >= 0.92`
@@ -121,6 +123,9 @@
   - `P0 -> P1 -> P2 -> P3` 우선순위 적용
   - raw `200` floor 우선 달성
   - 이후 PRD gate용 추가 수집 라운드
+- `[x]` 수집 batch / source strategy 정리
+  - `iNaturalist KR -> GBIF -> manual curation`
+  - `P0 7개 batch`, `P1 5개 batch`
 - `[ ]` 재학습 파이프라인 1차 실행
   - preprocessing
   - TFRecord 생성

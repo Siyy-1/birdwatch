@@ -9,6 +9,7 @@ This directory contains a three-step dataset pipeline for the BirdWatch AI train
 - `scripts/generate_tfrecords.py`: Converts processed images into sharded TFRecord datasets and writes label and dataset metadata.
 - `scripts/analyze_training_coverage.py`: Compares the current trained label map and processed dataset coverage against the full 300-species target and writes a gap report into `_workspace/`.
 - `scripts/prepare_full_retraining_manifest.py`: Builds a full 300-species recollect/reprocess/retrain manifest with raw/processed deficits and priority bands.
+- `scripts/prepare_collection_batches.py`: Splits the retraining manifest into executable P0/P1/P2/P3 collection batches.
 
 ## Install
 
@@ -24,6 +25,7 @@ python ai/scripts/preprocess_images.py --input_dir data/raw --output_dir data/pr
 python ai/scripts/generate_tfrecords.py --input_dir data/processed --output_dir data/tfrecords
 python ai/scripts/analyze_training_coverage.py
 python ai/scripts/prepare_full_retraining_manifest.py
+python ai/scripts/prepare_collection_batches.py
 ```
 
 ## Notes
@@ -34,3 +36,4 @@ python ai/scripts/prepare_full_retraining_manifest.py
 - `generate_tfrecords.py` verifies that TFRecord record counts match the processed image count for each split.
 - `analyze_training_coverage.py` currently reports the gap between the `300`-species launch target and the interim `141`-class trained model.
 - `prepare_full_retraining_manifest.py` currently shows that the next AI iteration should be treated as a full `300`-species rebuild, not a small top-up.
+- `prepare_collection_batches.py` generates the execution order for `iNaturalist KR -> GBIF -> manual curation`.
